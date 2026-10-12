@@ -59,6 +59,14 @@ final class ReconciliationCoordinator: ObservableObject {
     /// 游标 scope。写成常量，避免各处拼字符串导致读不到同一行。
     static let cursorScope = "apple_reminders.reconciliation"
 
+    /// 本地写入成功后的通知出口。
+    ///
+    /// 协调器由 ReconciliationCoordinatorView 用 @StateObject 创建，AppContainer 拿不到实例，
+    /// 无法像 TaskWriteService 那样逐实例注入，所以用进程级静态出口
+    /// （与本仓库既有的 LocalNotificationScheduler.onReceipt 同类：进程内唯一出口）。
+    /// 全类已是 @MainActor，回调也标 @MainActor，调用点可以同步调用。
+    static var onLocalWrite: (@MainActor () -> Void)?
+
     /// 最近一轮对账结果。为 nil 表示本次启动还没跑过。
     @Published private(set) var plan: ReconciliationPlan?
     /// 上次对账时间（UTC RFC3339 原文），用 DayCueClock.nowUTCString()。
@@ -270,6 +278,8 @@ final class ReconciliationCoordinator: ObservableObject {
                 notes.append("采用苹果侧改动时保存本地失败：\(error)")
                 return
             }
+            // 本地改动已落库才通知云同步：失败路径在上面的 catch 里已经返回。
+            Self.onLocalWrite?()
         } else {
             // 外部新增：本地还没有这条任务，按外部取值导入。
             let imported = makeTask(from: external)
@@ -423,6 +433,8 @@ final class ReconciliationCoordinator: ObservableObject {
         } catch {
             return "保存本地改动失败：\(error)"
         }
+        // 本地改动已落库才通知云同步：失败路径在上面的 catch 里已经返回。
+        Self.onLocalWrite?()
 
         // 清单归属记在 external_binding 上，只有它真的变了才需要单独写一次。
         if let listId = state.listId, listId != binding?.listId {

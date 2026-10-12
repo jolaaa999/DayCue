@@ -19,6 +19,21 @@ final class AppContainer: ObservableObject {
     let media: MediaStore
     let ocr = OCRService()
     let writer: TaskWriteService
+    /// 长期记忆的写入链路。
+    /// 只暴露协调器而不是让视图直接调 store：记忆的候选/确认/检索
+    /// 有一套必须按顺序走的规则（先查类别开关、推断不得自动成为事实），
+    /// 绕过它就会出现"关了记录还是写进去了"这类问题。
+    let memoryIngest: MemoryIngestCoordinator
+    /// 位置事件与主动通知。
+    /// 事件源在适配层（CoreLocation），求值与预算在 Core，这里只做编排与持有。
+    let proactiveGeo: ProactiveGeoCoordinator
+    /// 课后追问的通知安排。与 proactiveGeo 共用同一个通知调度器实例，
+    /// 否则两边各自取消"自己那批"通知时看不出对方的存在，会互相漏掉。
+    let followUpNotifications: FollowUpNotificationCoordinator
+    /// 云同步门面。
+    /// 写路径与视图必须拿到同一个实例：它内部持有网络监听、前台观察者和
+    /// 防抖入队任务，多个实例之间互相看不见，会出现"改了却没入队"。
+    let cloudSync: CloudSyncService
 
     /// 本地库打不开时会退回临时目录，这里如实告诉用户，而不是假装正常。
     @Published private(set) var startupWarning: String?
@@ -53,6 +68,37 @@ final class AppContainer: ObservableObject {
             reminders: reminders,
             notifications: notifications
         )
+        // 默认用确定性规则抽取，不接任何模型：本机没有供应商凭据时
+        // 宁可只产出有原文依据的候选，也不要生成看起来像记忆的假内容。
+        // 接入真实模型时把 provider 换掉即可，链路本身不用改。
+        self.memoryIngest = MemoryIngestCoordinator(
+            store: store,
+            extraction: MemoryExtraction(provider: DefaultRuleBasedExtractor())
+        )
+        // 两个协调器必须共用同一个 scheduler：通知的取消是按标识前缀做的，
+        // 两个实例各自持有一套内部状态时，一方取消不到另一方排的通知。
+        let proactiveNotifier = LocalNotificationScheduler()
+        self.proactiveGeo = ProactiveGeoCoordinator(store: store, notifier: proactiveNotifier)
+        self.followUpNotifications = FollowUpNotificationCoordinator(
+            store: store,
+            notifier: proactiveNotifier
+        )
+        // 云同步：后端地址与令牌都从 settings 现读，设置页改完立即生效。
+        let cloudSync = CloudSyncService(store: store, settings: settings)
+        self.cloudSync = cloudSync
+
+        // 接线：写服务与对账协调器都不持有 CloudSyncService，
+        // 只通过回调把「本地有新变更」交出去，装配细节留在这里。
+        // 必须在 cloudSync 初始化之后再接线，否则闭包捕获不到实例。
+        // 用 weak 捕获局部变量 cloudSync（而不是 self）：
+        //   1. 避免 AppContainer -> writer -> 闭包 -> AppContainer 的循环引用；
+        //   2. 这两处出口的生命周期比同步服务长，强引用会无谓延长它的存活时间。
+        self.writer.onLocalWrite = { [weak cloudSync] in
+            cloudSync?.noteLocalChange()
+        }
+        ReconciliationCoordinator.onLocalWrite = { [weak cloudSync] in
+            cloudSync?.noteLocalChange()
+        }
 
         // 把子服务的变更信号转发到容器。
         // 视图只观察容器这一个 EnvironmentObject；不转发的话，

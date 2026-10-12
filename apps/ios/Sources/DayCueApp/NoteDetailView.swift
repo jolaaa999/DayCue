@@ -206,6 +206,8 @@ struct NoteDetailView: View {
     private func performDelete() {
         do {
             try container.store.softDeleteNote(id: noteId)
+            // 软删除已经落库，通知云同步；写失败会走 catch，不会宣称有变更。
+            container.cloudSync.noteLocalChange()
             dismiss()
         } catch {
             actionMessage = "删除失败：\(error)"

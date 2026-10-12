@@ -102,7 +102,7 @@ struct MemoryDetailView: View {
 
             if memory.status != .confirmed {
                 Button("确认这条记忆是事实") {
-                    updateStatus(.confirmed, successText: "已确认。以后它会作为事实出现在检索结果里。")
+                    confirmAsFact()
                 }
             }
 
@@ -246,6 +246,8 @@ struct MemoryDetailView: View {
         }
         do {
             _ = try container.store.updateMemoryStatement(id: memory.id, statement: trimmed, at: Date())
+            // 本地写成功才通知云同步：写在 do 里写库之后，catch 分支不会执行到这里。
+            container.cloudSync.noteLocalChange()
             load()
             actionMessage = "已保存为新的一版。旧说法仍然可以在下面查到。"
         } catch {
@@ -263,9 +265,36 @@ struct MemoryDetailView: View {
         }
     }
 
+    /// 确认走协调器，而不是直接改状态位。
+    ///
+    /// 只有这条路径才允许把来源升级成「用户说过」，并拦下与已确认记忆的冲突。
+    /// 直接调 setMemoryStatus 会让一条模型推断的说法看起来像是用户自己确认过的事实。
+    private func confirmAsFact() {
+        do {
+            let result = try container.memoryIngest.confirm(candidateId: memoryId, now: Date())
+            switch result {
+            case .confirmed:
+                actionMessage = "已确认。以后它会作为事实出现在检索结果里。"
+            case .alreadyConfirmed:
+                actionMessage = "这条记忆已经是确认状态。"
+            case .blockedByConflict(_, let conflicts):
+                actionMessage = "它和已确认的 \(conflicts.count) 条记忆互相矛盾，请先把其中一条标记为「已失效」。"
+            case .notFound:
+                actionMessage = "找不到这条记忆，可能已经被删除。"
+            case .notConfirmable:
+                actionMessage = "已失效的说法不能被重新确认，请修改说法后保存。"
+            }
+            load()
+        } catch {
+            actionMessage = "确认失败：\(error)"
+        }
+    }
+
     private func performDelete() {
         do {
             try container.store.softDeleteMemory(id: memoryId, at: Date())
+            // 软删除已经落库，通知云同步；写失败会走 catch，不会宣称有变更。
+            container.cloudSync.noteLocalChange()
             dismiss()
         } catch {
             actionMessage = "删除失败：\(error)"

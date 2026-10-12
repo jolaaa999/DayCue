@@ -219,6 +219,10 @@ struct ProactiveSettingsView: View {
                 value: ProactiveBudgetConfigCodec.encode(config)
             )
             message = "设置已保存。"
+            // 预算或静默时段变了，已经排进系统的课后追问通知就可能是违规的。
+            // 必须立刻重算并撤掉旧请求，不能等它到点 —— 到点那一刻再去判断，
+            // 用户已经被打扰了。
+            Task { await container.followUpNotifications.reapplyFromSettings() }
         } catch {
             message = "保存设置失败：\(error)"
         }

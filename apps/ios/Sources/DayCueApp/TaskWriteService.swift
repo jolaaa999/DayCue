@@ -32,6 +32,13 @@ final class TaskWriteService {
         let note: String?
     }
 
+    /// 本地写入成功后的通知出口。
+    ///
+    /// 这个类不该认识 CloudSyncService：它只负责把「本地有新变更」这件事交出去，
+    /// 谁来消费、怎么同步由 AppContainer 装配时决定。
+    /// 类本身是 @MainActor，回调也标 @MainActor，调用点可以同步调用，不必再跳一次 actor。
+    var onLocalWrite: (@MainActor () -> Void)?
+
     init(
         store: DayCueStore,
         settings: AppSettings,
@@ -61,6 +68,8 @@ final class TaskWriteService {
             return Outcome(task: nil, note: "保存到本机失败：\(error)")
         }
 
+        // 本地落库成功后才通知云同步：放在 catch 之后，失败路径已经 return，不会把不存在的任务入队。
+        onLocalWrite?()
         return await applyExternalWrite(taskId: task.id, forcedNote: nil)
     }
 
@@ -109,6 +118,8 @@ final class TaskWriteService {
         } catch {
             return Outcome(task: nil, note: "保存到本机失败：\(error)")
         }
+        // 本地落库成功后才通知云同步：写在 catch 之后，失败路径已经 return。
+        onLocalWrite?()
         return await applyExternalWrite(taskId: task.id, forcedNote: nil)
     }
 
@@ -212,6 +223,8 @@ final class TaskWriteService {
         } catch {
             return .failed("清理本地数据失败：\(error)")
         }
+        // 软删除已经落库，通知云同步；失败路径在上面的 catch 里已经返回。
+        onLocalWrite?()
         return .removed(externalDeleted: externalDeleted)
     }
 

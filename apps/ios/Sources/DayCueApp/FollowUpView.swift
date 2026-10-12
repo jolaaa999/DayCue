@@ -504,6 +504,10 @@ private struct FollowUpReplySheet: View {
             let outcome = try container.store.applyFollowUpArchive(plan)
             archivedNote = outcome.note
             archivedTask = outcome.task
+            // 归档成功后立刻过一遍记忆抽取：学生的口头回复里经常带着
+            // "我习惯先看文献再做题"这类自带原文依据的偏好，这是记忆最自然的来源。
+            // 抽取失败不能影响归档结果，所以这里吞掉错误（候选落没落库由记忆页自己显示）。
+            _ = try? container.memoryIngest.ingest(replies: [outcome.reply], now: Date())
             let taskSuffix = outcome.task == nil ? "没有创建任务。" : "并创建了任务「\(outcome.task?.title ?? "")」。"
             onArchived("回复已归档为笔记「\(outcome.note.title)」，\(taskSuffix)")
         } catch {

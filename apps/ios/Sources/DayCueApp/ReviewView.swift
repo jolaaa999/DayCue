@@ -146,6 +146,17 @@ struct ReviewView: View {
             if let note = outcome.note { notes.append(note) }
         }
 
+        // 被选中的笔记必须真的落库。
+        // 之前这里只建任务，笔记仅作为提案 JSON 的一个字段躺着 —— 那样用户在笔记页
+        // 看不到、改不了、删不掉，「笔记」就只是解析结果的一部分，而不是一条记录。
+        // occurredAt 取记录本身的录入时刻：笔记的发生时间要指向用户说话的那一刻，
+        // 而不是他事后点确认的那一刻。
+        let noteOutcome = (try? container.store.applySelectedNoteDrafts(
+            drafts,
+            captureId: context.captureId,
+            occurredAt: currentCapture?.recordedAt
+        )) ?? NoteUpsertOutcome()
+
         let anySelected = drafts.contains { $0.isSelected }
         try? container.store.updateProposalStatus(
             captureId: context.captureId,
@@ -153,12 +164,11 @@ struct ReviewView: View {
         )
         try? container.store.updateCaptureStatus(id: context.captureId, status: .extracted)
 
-        let noteCount = drafts.selectedNoteCount
         var message = "已创建 \(created) 条任务。"
-        if noteCount > 0 {
-            // 说清楚笔记存在哪里：它只随这条记录的解析结果一起保存在本机数据库里，
-            // 既不是任务，也不会出现在苹果提醒事项里。
-            message += "另有 \(noteCount) 条笔记只保存在本机这条记录里（不会写入提醒事项，也不计入任务）。"
+        if !noteOutcome.isEmpty {
+            // 说清楚笔记存在哪里：它是本机数据库里的一条记录，可以在「设置 → 笔记」
+            // 查看和修改；既不是任务，也不会出现在苹果提醒事项里。
+            message += "笔记：" + noteOutcome.summaryText + "（可在「设置 → 笔记」查看）"
         }
         if !notes.isEmpty {
             message += " " + notes.joined(separator: " ")

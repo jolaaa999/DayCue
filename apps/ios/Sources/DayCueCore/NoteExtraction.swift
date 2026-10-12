@@ -90,66 +90,123 @@ public extension DayCueStore {
 
             for item in items {
                 guard item.kind == .note else { continue }
-
-                let title = Self.noteTitle(for: item)
-                let body = Self.noteBody(for: item)
-                // 先判内容有效性：如果候选是空的，绝不能拿它去覆盖一条已有笔记的正文。
-                guard !title.isEmpty || !body.isEmpty else {
-                    outcome.skippedInvalid += 1
-                    continue
-                }
-
-                let existing = try note(
-                    originCaptureId: captureId,
-                    originItemId: item.itemId,
-                    includeDeleted: true
-                )
-
-                if let existing {
-                    if existing.deletedAt != nil {
-                        outcome.skippedDeleted += 1
-                        continue
-                    }
-                    if existing.userEdited {
-                        outcome.skippedUserEdited += 1
-                        continue
-                    }
-
-                    var updated = existing
-                    updated.title = title
-                    updated.body = body
-                    updated.courseHint = item.courseHint
-                    // 标签是用户自己加的，后端候选里没有对应字段，绝不能在重试时抹掉。
-                    updated.tags = existing.tags
-                    // occurredAt 只在这次解析明确给出时才改，避免把已有的发生时间清空。
-                    if let occurredAt { updated.occurredAt = occurredAt }
-                    try updateNote(updated)
-                    outcome.updated += 1
-                    continue
-                }
-
-                let now = DayCueClock.nowUTCString()
-                let record = NoteRecord(
-                    id: DayCueID.new(),
-                    title: title,
-                    body: body,
-                    tags: [],
+                try upsertNote(
+                    captureId: captureId,
+                    itemId: item.itemId,
+                    title: Self.noteTitle(for: item),
+                    body: Self.noteBody(for: item),
                     courseHint: item.courseHint,
-                    originCaptureId: captureId,
-                    originItemId: item.itemId,
-                    originKind: .capture,
-                    userEdited: false,
                     occurredAt: occurredAt,
-                    createdAt: now,
-                    updatedAt: now,
-                    deletedAt: nil
+                    outcome: &outcome
                 )
-                _ = try insertNote(record)
-                outcome.inserted += 1
             }
 
             return outcome
         }
+    }
+
+    /// 只落库「用户在预览页选中」的笔记草稿。
+    ///
+    /// 为什么不直接调 applyNoteCandidates(items:)：那个入口会把一次解析里
+    /// 所有 kind == note 的条目都写进去，包括用户取消勾选的。
+    /// 预览页的意义就是「点了才算数」，把没勾的也写进去等于让勾选变成装饰。
+    @discardableResult
+    func applySelectedNoteDrafts(
+        _ drafts: [ReviewDraft],
+        captureId: String,
+        occurredAt: String? = nil
+    ) throws -> NoteUpsertOutcome {
+        return try database.transaction {
+            var outcome = NoteUpsertOutcome()
+
+            for draft in drafts where draft.kind == .note && draft.isSelected {
+                // draft.id 就是后端给的 itemId（见 ReviewDraft.from(item:mode:)），
+                // 所以重试解析时幂等键仍然对得上，不会产生第二条笔记。
+                let title = draft.title.trimmingCharacters(in: .whitespacesAndNewlines)
+                try upsertNote(
+                    captureId: captureId,
+                    itemId: draft.id,
+                    title: title.isEmpty
+                        ? String(Self.firstNonEmptyLine(of: draft.sourceEvidence).prefix(60))
+                        : title,
+                    body: Self.noteBody(forDraft: draft),
+                    courseHint: draft.courseHint,
+                    occurredAt: occurredAt,
+                    outcome: &outcome
+                )
+            }
+
+            return outcome
+        }
+    }
+
+    /// 单条笔记的落库规则。
+    ///
+    /// 抽出来是因为「按响应条目落库」和「按选中草稿落库」必须走完全一样的
+    /// 幂等与保护规则：已编辑的绝不覆盖、已删除的不复活、重试不产生第二条。
+    /// 各写一份迟早会漂移，而漂移的后果是用户改过的内容被 AI 结果冲掉。
+    private func upsertNote(
+        captureId: String,
+        itemId: String,
+        title: String,
+        body: String,
+        courseHint: String?,
+        occurredAt: String?,
+        outcome: inout NoteUpsertOutcome
+    ) throws {
+        // 先判内容有效性：如果候选是空的，绝不能拿它去覆盖一条已有笔记的正文。
+        guard !title.isEmpty || !body.isEmpty else {
+            outcome.skippedInvalid += 1
+            return
+        }
+
+        let existing = try note(
+            originCaptureId: captureId,
+            originItemId: itemId,
+            includeDeleted: true
+        )
+
+        if let existing {
+            if existing.deletedAt != nil {
+                outcome.skippedDeleted += 1
+                return
+            }
+            if existing.userEdited {
+                outcome.skippedUserEdited += 1
+                return
+            }
+
+            var updated = existing
+            updated.title = title
+            updated.body = body
+            updated.courseHint = courseHint
+            // 标签是用户自己加的，后端候选里没有对应字段，绝不能在重试时抹掉。
+            updated.tags = existing.tags
+            // occurredAt 只在这次解析明确给出时才改，避免把已有的发生时间清空。
+            if let occurredAt { updated.occurredAt = occurredAt }
+            try updateNote(updated)
+            outcome.updated += 1
+            return
+        }
+
+        let now = DayCueClock.nowUTCString()
+        let record = NoteRecord(
+            id: DayCueID.new(),
+            title: title,
+            body: body,
+            tags: [],
+            courseHint: courseHint,
+            originCaptureId: captureId,
+            originItemId: itemId,
+            originKind: .capture,
+            userEdited: false,
+            occurredAt: occurredAt,
+            createdAt: now,
+            updatedAt: now,
+            deletedAt: nil
+        )
+        _ = try insertNote(record)
+        outcome.inserted += 1
     }
 
     /// 契约响应入口。

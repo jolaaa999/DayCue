@@ -24,6 +24,17 @@ struct PlaceListView: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
 
+            // 定位不可用时把原因摆出来。
+            // 不显示这一段的话，用户会以为规则在正常运行，
+            // 而实际上它永远不会触发 —— 这比直接报错更糟。
+            GeoRuleStatusView(
+                capability: container.proactiveGeo.capability,
+                readiness: container.proactiveGeo.ruleReadiness,
+                ruleTitle: { ruleId in
+                    (try? container.store.geoRule(id: ruleId))?.title ?? ruleId
+                }
+            )
+
             if let loadError {
                 Section {
                     Label(loadError, systemImage: "exclamationmark.triangle")
@@ -68,6 +79,9 @@ struct PlaceListView: View {
             }
         }
         .onAppear { reload() }
+        // 进这一页就顺手把注册对齐一次：用户可能刚在系统设置里改了定位权限，
+        // 也可能上次退出时进程被系统杀在注册中途。
+        .task { await container.proactiveGeo.refreshRegistrations() }
     }
 
     private func reload() {

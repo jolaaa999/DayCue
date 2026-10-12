@@ -384,8 +384,20 @@ final class CaptureViewModel: ObservableObject {
             let outcome = await container.writer.createTask(from: draft, captureId: context.captureId)
             if let note = outcome.note { notes.append(note) }
         }
+        // 自动模式只是省掉「点一次确认」，不等于笔记可以不落库。
+        // 不写的话，自动模式下用户的记录内容同样只留在提案 JSON 里。
+        let recordedAt = (try? container.store.capture(id: context.captureId))?.recordedAt
+        let noteOutcome = (try? container.store.applySelectedNoteDrafts(
+            context.drafts,
+            captureId: context.captureId,
+            occurredAt: recordedAt
+        )) ?? NoteUpsertOutcome()
+
         try? container.store.updateProposalStatus(captureId: context.captureId, status: .accepted)
-        statusMessage = notes.isEmpty ? "已按自动模式创建任务。" : notes.joined(separator: " ")
+        var parts = ["已按自动模式创建任务。"]
+        if !noteOutcome.isEmpty { parts.append("笔记：" + noteOutcome.summaryText) }
+        if !notes.isEmpty { parts.append(notes.joined(separator: " ")) }
+        statusMessage = parts.joined(separator: " ")
         phase = .idle
     }
 

@@ -33,6 +33,7 @@ struct SettingsView: View {
             dataSection
             contentSection
             proactiveSection
+            cloudSyncSection
 #if DEBUG
             debugSection
 #endif
@@ -229,6 +230,26 @@ struct SettingsView: View {
             Text("执行方式")
         } footer: {
             Text("默认关闭：先看解析结果再确认。打开后，字段完整且不需要澄清的候选会直接创建；笔记永远不会自动写入系统。")
+                .font(.caption)
+        }
+    }
+
+    // MARK: - 云同步
+
+    /// 云同步入口。
+    /// 后端地址仍可在「AI 服务」那节修改（同一个 AppSettings 字段），
+    /// 但登录状态、冲突与设备能力上报只有这一页看得到。
+    private var cloudSyncSection: some View {
+        Section {
+            NavigationLink {
+                CloudSyncSettingsView(service: container.cloudSync)
+            } label: {
+                Label("云同步", systemImage: "arrow.triangle.2.circlepath.icloud")
+            }
+        } header: {
+            Text("云同步")
+        } footer: {
+            Text("未登录或未配置后端地址时，同步一个请求都不会发；本地功能不受影响。")
                 .font(.caption)
         }
     }

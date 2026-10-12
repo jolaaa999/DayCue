@@ -295,6 +295,10 @@ struct PlaceEditorView: View {
             return
         }
         rules = (try? container.store.geoRules(placeId: placeId)) ?? []
+        // 规则或地点变了就必须重新注册：区域监控是按地点标识注册的，
+        // 不取消旧注册会留下一条永远不会被清理的野监控（还会耗电）。
+        // 放在这里是因为保存地点、启停规则、删除规则、新增规则最终都会调用它。
+        Task { await container.proactiveGeo.applyRuleChanges() }
     }
 
     private func parsedCoordinate(_ text: String, range: ClosedRange<Double>) -> Double? {

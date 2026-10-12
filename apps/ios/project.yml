@@ -49,3 +49,5 @@ targets:
         NSMicrophoneUsageDescription: DayCue 需要使用麦克风录制语音备忘，录音先保存在本机。
         NSSpeechRecognitionUsageDescription: DayCue 需要语音识别把录音转成文字；识别失败时录音仍然保留，不会丢失。
         NSCameraUsageDescription: DayCue 需要使用相机拍摄白板、通知截图或作业说明并识别其中的文字。
+        NSLocationWhenInUseUsageDescription: DayCue 需要你的位置来判断你是否到达或离开你确认过的地点，只用于你设置的地点规则；位置太旧或精度不足时会直接丢弃，不会用旧坐标触发提醒。
+        NSLocationAlwaysAndWhenInUseUsageDescription: 只有在你希望 App 没打开时也能收到地点提醒时才需要「始终」权限。DayCue 不记录移动轨迹，也没有历史位置表。

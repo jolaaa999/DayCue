@@ -252,4 +252,85 @@ final class NoteExtractionTests: XCTestCase {
         XCTAssertEqual(NoteUpsertOutcome().summaryText, "这次解析没有产生笔记。")
         XCTAssertEqual(NoteUpsertOutcome(skippedUserEdited: 2).summaryText, "保留 2 条你改过的笔记。")
     }
+
+    // MARK: - 用户勾选才落库（预览页确认路径）
+
+    /// 预览页的意义是「点了才算数」。
+    ///
+    /// 这条测试守的是一个真实缺陷：应用层曾经只创建任务，笔记只作为提案 JSON 的一个
+    /// 字段躺着，用户在笔记页看不到、改不了、删不掉。修完之后，**取消勾选的候选
+    /// 绝不能落库** —— 否则勾选框就只是装饰，用户以为取消掉了，数据却还在。
+    func testOnlySelectedNoteDraftsArePersisted() throws {
+        let captureId = "cap_select_1"
+        try insertCapture(id: captureId)
+
+        let selected = ReviewDraft.from(item: noteItem(itemId: "itm_keep", title: "留下的"), mode: .live)
+        var deselected = ReviewDraft.from(item: noteItem(itemId: "itm_drop", title: "取消的"), mode: .live)
+        deselected.isSelected = false
+
+        let outcome = try store.applySelectedNoteDrafts(
+            [selected, deselected],
+            captureId: captureId,
+            occurredAt: "2026-10-12T08:30:00Z"
+        )
+
+        // 只写了一条：被取消的那条不产生任何动作，也不算「跳过」——
+        // 跳过意味着"系统看过但没写"，而这里用户根本没要它。
+        XCTAssertEqual(outcome.inserted, 1)
+        XCTAssertEqual(outcome.skipped, 0)
+
+        XCTAssertNotNil(try store.note(originCaptureId: captureId, originItemId: "itm_keep"))
+        XCTAssertNil(try store.note(originCaptureId: captureId, originItemId: "itm_drop"))
+    }
+
+    /// 笔记的「发生时间」应当指向用户说话的那一刻，而不是他事后点确认的那一刻。
+    /// 取错的话，每确认一次就会把这条笔记的时间线往后挪一次。
+    func testSelectedNoteUsesCaptureRecordedAtNotConfirmTime() throws {
+        let captureId = "cap_select_2"
+        try insertCapture(id: captureId, recordedAt: "2026-10-12T08:30:00Z")
+
+        let draft = ReviewDraft.from(item: noteItem(itemId: "itm_time"), mode: .live)
+        _ = try store.applySelectedNoteDrafts(
+            [draft],
+            captureId: captureId,
+            occurredAt: "2026-10-12T08:30:00Z"
+        )
+
+        let saved = try XCTUnwrap(try store.note(originCaptureId: captureId, originItemId: "itm_time"))
+        XCTAssertEqual(saved.occurredAt, "2026-10-12T08:30:00Z")
+    }
+
+    /// 同一条候选被确认两次（用户重复点、或自动模式与手动确认各走一次），
+    /// 只能有一条笔记；否则笔记列表里会出现两条一模一样的记录。
+    func testConfirmingTwiceDoesNotDuplicateNote() throws {
+        let captureId = "cap_select_3"
+        try insertCapture(id: captureId)
+        let draft = ReviewDraft.from(item: noteItem(itemId: "itm_twice"), mode: .live)
+
+        let first = try store.applySelectedNoteDrafts([draft], captureId: captureId)
+        let second = try store.applySelectedNoteDrafts([draft], captureId: captureId)
+
+        XCTAssertEqual(first.inserted, 1)
+        XCTAssertEqual(second.inserted, 0)
+        XCTAssertEqual(second.updated, 1, "第二次应当是覆盖更新同一条，而不是新增")
+        XCTAssertEqual(try store.notes().count, 1)
+    }
+
+    /// 用户删掉一条笔记之后，重试解析绝不能把它复活。
+    /// 「我删了的东西又回来了」是用户最难接受的一类问题。
+    func testDeletedNoteIsNotResurrectedBySelectedDrafts() throws {
+        let captureId = "cap_select_4"
+        try insertCapture(id: captureId)
+        let draft = ReviewDraft.from(item: noteItem(itemId: "itm_deleted"), mode: .live)
+
+        _ = try store.applySelectedNoteDrafts([draft], captureId: captureId)
+        let saved = try XCTUnwrap(try store.note(originCaptureId: captureId, originItemId: "itm_deleted"))
+        try store.softDeleteNote(id: saved.id)
+
+        let outcome = try store.applySelectedNoteDrafts([draft], captureId: captureId)
+
+        XCTAssertEqual(outcome.inserted, 0)
+        XCTAssertEqual(outcome.skippedDeleted, 1)
+    }
+
 }
