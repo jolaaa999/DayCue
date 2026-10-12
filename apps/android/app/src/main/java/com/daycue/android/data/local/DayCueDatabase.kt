@@ -45,11 +45,11 @@ import com.daycue.android.data.local.entity.TaskRecord
  * 表名与字段名与 iOS 的 Schema.swift 对齐。
  *
  * v3 加了 place.coordinate_system（记录坐标系）与 geo_rule.linked_task_id（规则关联任务）。
- * iOS 的 Schema.swift 也在 v3，但两边**内容并不相同**：iOS v3 只加了 place.coordinate_system，
- * 没有 linked_task_id。所以别把「版本号相同」当成「结构相同」——那正是下一个人最容易踩的坑。
+ * iOS 的 Schema.swift 现在也有同样的两列，但它记为 v4（本端记为 v3）。
+ * **不要把版本号当成结构对照表**：版本号只是各自的滚动计数，两边本来就可能不同步，
+ * 所以「号一样」和「结构一样」是两回事——这才是下一个人最容易踩的坑。
  * 这里不刻意让版本号互相对齐：跟随的代价是「Android 想加列就得等 iOS」，
  * 而本端迁移有 MIGRATION_2_3 + 导出 schema + 漂移测试三处把关，不需要靠对齐版本号来保平安。
- * 现在 Android 领先一列（linked_task_id），已在文档 5.2 记为两端已知不对称。
  *
  * 刻意**没有**调用 fallbackToDestructiveMigration()：本地库里有用户还没同步出去的笔记和课表，
  * 迁移写错时宁可启动崩溃并暴露问题，也不能把数据默默清空。

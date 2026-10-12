@@ -1,6 +1,8 @@
 package com.daycue.android
 
+import android.app.Activity
 import android.app.Application
+import android.os.Bundle
 import android.util.Log
 import androidx.work.Configuration
 import com.daycue.android.platform.notify.NotificationChannels
@@ -44,16 +46,48 @@ class DayCueApplication : Application(), Configuration.Provider {
         // 放在启动时做一次：能力（权限）随时可能被用户改，每次启动现读一次最接近事实；
         // 时区也在这里现读，用户跨时区或改了系统时区之后下一次启动就会修正。
         // 纯本地模式不发起任何请求——那是这个产品的合法形态，静默联网才是错的。
-        container.applicationScope.launch {
-            if (container.isPurelyLocal()) {
-                Log.i(TAG, "纯本地模式，跳过设备上报")
-                return@launch
+        reportDeviceIfNeeded("启动")
+        // 回前台时按需重报。
+        //
+        // 为什么不能只在启动时报一次：用户改了通知权限之后返回应用，进程还活着，
+        // 启动那次上报早已过去。不重报的话服务端会一直按旧能力决定要不要推送——
+        // 用户刚给了通知权限却仍收不到推送，或者刚禁用通知却还在被推送。
+        //
+        // 用 ActivityLifecycleCallbacks 而不是引入 lifecycle-process：后者要多一个依赖，
+        // 而这里只需要「有人回到前台」这一个信号。是否真的发请求由 DeviceReportService
+        // 按能力快照是否变化决定，所以频繁切界面不会变成频繁联网。
+        registerActivityLifecycleCallbacks(object : ActivityLifecycleCallbacks {
+            override fun onActivityResumed(activity: Activity) {
+                reportDeviceIfNeeded("回前台")
             }
-            container.deviceReportService.report()
-                .onSuccess { outcome ->
-                    Log.i(TAG, "设备已上报：" + outcome.deviceId + "，时区 " + outcome.reportedTimezone)
+
+            override fun onActivityCreated(activity: Activity, savedInstanceState: Bundle?) {}
+            override fun onActivityStarted(activity: Activity) {}
+            override fun onActivityPaused(activity: Activity) {}
+            override fun onActivityStopped(activity: Activity) {}
+            override fun onActivitySaveInstanceState(activity: Activity, outState: Bundle) {}
+            override fun onActivityDestroyed(activity: Activity) {}
+        })
+    }
+
+    /**
+     * 按需上报一次设备能力。reason 只进日志，用来区分「启动」与「回前台」。
+     *
+     * 纯本地模式直接返回：那是这个产品的合法形态，静默联网才是错的。
+     */
+    private fun reportDeviceIfNeeded(reason: String) {
+        if (container.isPurelyLocal()) {
+            Log.i(TAG, "纯本地模式，跳过设备上报（$reason）")
+            return
+        }
+        container.applicationScope.launch {
+            // 启动与回前台共用同一个入口：它自己会判断「这次到底要不要发」，
+            // 两条路径各写一套判断迟早会漂移成两种语义。
+            container.deviceReportService.reportIfStale()
+                ?.onSuccess { outcome ->
+                    Log.i(TAG, "设备已上报（$reason）：" + outcome.deviceId + "，时区 " + outcome.reportedTimezone)
                 }
-                .onFailure { error -> Log.w(TAG, "设备上报失败，本次跳过（不影响本地功能）", error) }
+                ?.onFailure { error -> Log.w(TAG, "设备上报失败（$reason），下次回前台再试", error) }
         }
     }
 

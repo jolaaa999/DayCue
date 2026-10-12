@@ -200,4 +200,113 @@ class DeviceReportServiceTest {
 
         assertTrue("上报失败只能是 Result.failure：它是尽力而为的旁路，不该把启动流程带崩", result.isFailure)
     }
+
+    // ---- 回前台按需重报 ----
+
+    /** 能力可变的能力快照替身：用它模拟「用户在系统设置里改了权限」。 */
+    private class MutableSnapshot(var capabilities: Map<String, Boolean>) : DeviceCapabilitySnapshot {
+        override fun asCapabilityMap(): Map<String, Boolean> = capabilities
+        override fun deviceName(): String = "Pixel 7"
+    }
+
+    private fun serviceFor(
+        registrar: RecordingRegistrar,
+        snapshot: MutableSnapshot,
+        now: () -> Long,
+        refreshIntervalMillis: Long = 30L * 60L * 1000L,
+    ) = DeviceReportService(
+        registrar = registrar,
+        capabilities = snapshot,
+        zones = { ZoneId.of("UTC") },
+        deviceIdProvider = { "dev-1" },
+        refreshIntervalMillis = refreshIntervalMillis,
+        nowMillis = now,
+    )
+
+    @Test
+    fun resumeRefreshSendsNothingWhenCapabilitiesAreUnchangedAndNotStale() = runTest {
+        val registrar = RecordingRegistrar()
+        var clock = 1_000_000L
+        val snapshot = MutableSnapshot(mapOf("notifications" to true))
+        val service = serviceFor(registrar, snapshot, { clock })
+
+        service.report().getOrThrow()
+        assertEquals(1, registrar.requests.size)
+
+        // 同一分钟内连切几次前台，能力没变，不该再发。
+        clock += 60_000L
+        assertEquals(null, service.reportIfStale())
+        assertEquals(null, service.reportIfStale())
+        assertEquals("能力没变且没过刷新周期时不能联网", 1, registrar.requests.size)
+    }
+
+    @Test
+    fun resumeRefreshReportsImmediatelyWhenCapabilitiesChanged() = runTest {
+        val registrar = RecordingRegistrar()
+        var clock = 1_000_000L
+        val snapshot = MutableSnapshot(mapOf("notifications" to false))
+        val service = serviceFor(registrar, snapshot, { clock })
+
+        service.report().getOrThrow()
+        clock += 1_000L
+
+        // 用户刚在系统设置里给了通知权限，返回应用：必须立刻重报，
+        // 否则服务端会一直认为这台设备不能收推送。
+        snapshot.capabilities = mapOf("notifications" to true)
+        val outcome = service.reportIfStale()
+
+        assertTrue("能力变化必须触发重报", outcome != null)
+        assertEquals(2, registrar.requests.size)
+        assertEquals(true, registrar.requests.last().capabilities["notifications"])
+    }
+
+    @Test
+    fun resumeRefreshReportsWhenTheRefreshIntervalHasPassed() = runTest {
+        val registrar = RecordingRegistrar()
+        var clock = 1_000_000L
+        val snapshot = MutableSnapshot(mapOf("notifications" to true))
+        val service = serviceFor(registrar, snapshot, { clock }, refreshIntervalMillis = 60_000L)
+
+        service.report().getOrThrow()
+
+        clock += 59_000L
+        assertEquals(null, service.reportIfStale())
+
+        clock += 2_000L
+        assertTrue("超过刷新周期要重报，否则服务端的 last_seen_at 会一直停在过去", service.reportIfStale() != null)
+        assertEquals(2, registrar.requests.size)
+    }
+
+    @Test
+    fun resumeRefreshRetriesImmediatelyAfterAFailure() = runTest {
+        val registrar = RecordingRegistrar()
+        var clock = 1_000_000L
+        val snapshot = MutableSnapshot(mapOf("notifications" to true))
+        val service = serviceFor(registrar, snapshot, { clock })
+        registrar.response = { throw IllegalStateException("后端不可用") }
+
+        assertTrue(service.reportIfStale()!!.isFailure)
+        assertEquals(1, registrar.requests.size)
+
+        // 失败不能算作「已上报」：否则用户会因为一次网络抖动而错过整个刷新周期。
+        clock += 1_000L
+        registrar.response = { request -> DeviceUpsertResponse(id = request.id ?: "dev-1", lastSeenAt = "2026-10-12T09:00:00Z") }
+        assertTrue("失败之后下一次回前台就该重试", service.reportIfStale()!!.isSuccess)
+        assertEquals(2, registrar.requests.size)
+    }
+
+    @Test
+    fun resumeRefreshDoesNotSendTwiceWhileOneIsStillInFlight() = runTest {
+        val registrar = RecordingRegistrar()
+        val snapshot = MutableSnapshot(mapOf("notifications" to true))
+        val service = serviceFor(registrar, snapshot, { 1_000_000L })
+
+        // 回前台会连续触发（每个 Activity 各一次），这里验「连着调用不会连着发」。
+        val first = service.reportIfStale()
+        assertTrue(first != null)
+        assertEquals(1, registrar.requests.size)
+        // 能力与上次一致、且没过周期 → 第二次不会再发。
+        assertEquals(null, service.reportIfStale())
+        assertEquals(1, registrar.requests.size)
+    }
 }
