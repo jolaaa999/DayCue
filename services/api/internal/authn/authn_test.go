@@ -157,3 +157,23 @@ func TestParseBearer(t *testing.T) {
 }
 
 func encodeRaw(b []byte) string { return base64.RawURLEncoding.EncodeToString(b) }
+
+// 回归：userID 里含点时必须仍能正确校验。
+// 曾经载荷是 "<userID>.<exp>"，按第一个点切分会把 "com.1791..." 当成过期时间，
+// 导致由邮箱派生的 userID（如 "u_a_example.com"）签发的令牌永远无效。
+func TestTokenRoundTripsForUserIDContainingDots(t *testing.T) {
+	iss, _ := NewIssuer(strings.Repeat("k", 32), fixedClock(base))
+	for _, uid := range []string{"u_a_example.com", "a.b.c.d", "u_1.2.3"} {
+		tok, err := iss.Issue(uid, time.Hour)
+		if err != nil {
+			t.Fatalf("签发 %q 失败: %v", uid, err)
+		}
+		got, err := iss.Verify(tok)
+		if err != nil {
+			t.Fatalf("含点 userID %q 应能校验通过，实际 %v", uid, err)
+		}
+		if got != uid {
+			t.Fatalf("应还原为 %q，实际 %q", uid, got)
+		}
+	}
+}

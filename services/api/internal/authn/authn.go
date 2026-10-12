@@ -115,8 +115,12 @@ func NewIssuer(secret string, now func() time.Time) (*Issuer, error) {
 
 // Issue 签发一枚在 ttl 之后过期的令牌。
 //
-// 载荷是 "<userID>.<过期Unix秒>"，后面跟 HMAC 签名。
+// 载荷是 "<过期Unix秒>.<userID>"，后面跟 HMAC 签名。
 // 用点号分隔而不是 JSON，是为了让签名覆盖的字节序列完全确定。
+//
+// **过期时间必须放在前面**：userID 完全可能自己带点（例如由邮箱派生的
+// "u_a_example.com"）。若把 userID 放前面，按第一个点切分就会把
+// "com.1791..." 整段当成过期时间去解析，令牌永远校验失败。
 func (i *Issuer) Issue(userID string, ttl time.Duration) (string, error) {
 	if strings.TrimSpace(userID) == "" {
 		return "", errors.New("authn: userID 不能为空")
@@ -125,7 +129,7 @@ func (i *Issuer) Issue(userID string, ttl time.Duration) (string, error) {
 		return "", errors.New("authn: ttl 必须为正")
 	}
 	exp := i.now().Add(ttl).Unix()
-	payload := userID + "." + strconv.FormatInt(exp, 10)
+	payload := strconv.FormatInt(exp, 10) + "." + userID
 	sig := i.sign(payload)
 	return base64.RawURLEncoding.EncodeToString([]byte(payload)) + "." + sig, nil
 }
@@ -147,7 +151,8 @@ func (i *Issuer) Verify(token string) (string, error) {
 		return "", ErrInvalidToken
 	}
 
-	userID, expStr, ok := strings.Cut(payload, ".")
+	// 过期时间在前，userID 取"剩下的全部" —— 这样 userID 里含点也不会被切坏。
+	expStr, userID, ok := strings.Cut(payload, ".")
 	if !ok || userID == "" {
 		return "", ErrInvalidToken
 	}
