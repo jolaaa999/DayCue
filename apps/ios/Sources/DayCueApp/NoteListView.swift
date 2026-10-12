@@ -1,11 +1,12 @@
 import SwiftUI
 import DayCueCore
 
-/// 笔记列表。
+/// 笔记列表：浏览、搜索，以及手动新建入口。
 ///
-/// 只做浏览与搜索，不放「新建笔记」入口：笔记的来源必须可追溯（记录 / 课后回复 / 手动 / 记忆），
-/// 在浏览页凭空造一条没有来源的笔记会让 origin 字段失去意义。
-/// 手动创建走「记录」流程，那样至少有一条原始记录垫底。
+/// 「来源必须可追溯」（记录 / 课后回复 / 手动 / 记忆）这条原则没有被新建入口破坏：
+/// 手动创建的笔记落库时 originKind 固定 .manual，且**不写** originCaptureId /
+/// originItemId 去假装它来自某条记录。视图不直接调 store，而是走 NoteWriteCoordinator，
+/// 由它保证「写成功之后才通知云同步」。
 struct NoteListView: View {
 
     @EnvironmentObject private var container: AppContainer
@@ -13,6 +14,7 @@ struct NoteListView: View {
     @State private var notes: [NoteRecord] = []
     @State private var searchText = ""
     @State private var loadError: String?
+    @State private var showingEditor = false
 
     var body: some View {
         List {
@@ -54,6 +56,21 @@ struct NoteListView: View {
         // 用 onAppear 而不是 task：从详情页返回时要重新读库，
         // 否则刚删掉或刚改过的笔记会继续留在列表里。
         .onAppear { reload() }
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                Button {
+                    showingEditor = true
+                } label: {
+                    Label("新建笔记", systemImage: "square.and.pencil")
+                }
+            }
+        }
+        // 用 onDismiss 而不是依赖列表的 onAppear：表单收起时列表不一定会重新出现，
+        // 新笔记就会"存了却看不到"。
+        .sheet(isPresented: $showingEditor, onDismiss: { reload() }) {
+            ManualNoteEditorView()
+                .environmentObject(container)
+        }
     }
 
     private var emptyTitle: String {
@@ -62,7 +79,7 @@ struct NoteListView: View {
 
     private var emptyMessage: String {
         if searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            return "笔记保存在本机。在「记录」里说一句话、录一段音或拍张照片，确认后解析出的笔记会出现在这里。"
+            return "笔记保存在本机。点右上角的手写图标可以手动新建一条；也可以在「记录」里说一句话、录一段音或拍张照片，确认后解析出的笔记同样会出现在这里。"
         }
         return "换个关键词试试。搜索会同时匹配标题、正文和标签。"
     }

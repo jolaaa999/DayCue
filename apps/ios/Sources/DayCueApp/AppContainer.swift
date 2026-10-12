@@ -34,6 +34,10 @@ final class AppContainer: ObservableObject {
     /// 写路径与视图必须拿到同一个实例：它内部持有网络监听、前台观察者和
     /// 防抖入队任务，多个实例之间互相看不见，会出现"改了却没入队"。
     let cloudSync: CloudSyncService
+    /// 用户发起的笔记写入编排（新建 / 编辑 / 删除）。
+    /// 视图不直接调 store：写成功之后必须通知云同步，把「写」与「写完通知」
+    /// 绑在同一个类型里，才不会漏掉某一条入口。
+    let noteWrite: NoteWriteCoordinator
 
     /// 本地库打不开时会退回临时目录，这里如实告诉用户，而不是假装正常。
     @Published private(set) var startupWarning: String?
@@ -86,6 +90,12 @@ final class AppContainer: ObservableObject {
         // 云同步：后端地址与令牌都从 settings 现读，设置页改完立即生效。
         let cloudSync = CloudSyncService(store: store, settings: settings)
         self.cloudSync = cloudSync
+        // 笔记写入的云同步出口。适配器内部跳一次 @MainActor（noteLocalChange 是 @MainActor 的），
+        // Core 侧的 NoteWriteCoordinator 因此保持非隔离、可被 macOS 上的单元测试直接调用。
+        self.noteWrite = NoteWriteCoordinator(
+            store: store,
+            reporter: CloudSyncNoteChangeNotifier(cloudSync: cloudSync)
+        )
 
         // 接线：写服务与对账协调器都不持有 CloudSyncService，
         // 只通过回调把「本地有新变更」交出去，装配细节留在这里。

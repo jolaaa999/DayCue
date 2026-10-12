@@ -157,6 +157,12 @@ struct ReviewView: View {
             occurredAt: currentCapture?.recordedAt
         )) ?? NoteUpsertOutcome()
 
+        // AI 落库的笔记和手动笔记一样要入队云同步，否则只选笔记、没建任务的这次确认
+        // 本地写了却永远不会被推上去。只有真的写入才通知：全是 skipped 时库没有变化。
+        if noteOutcome.inserted > 0 || noteOutcome.updated > 0 {
+            container.cloudSync.noteLocalChange()
+        }
+
         let anySelected = drafts.contains { $0.isSelected }
         try? container.store.updateProposalStatus(
             captureId: context.captureId,

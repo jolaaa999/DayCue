@@ -73,25 +73,53 @@ final class ProactiveNotificationReceiptTests: XCTestCase {
         XCTAssertEqual(row.deliveredAtUTC, RFC3339.utcString(from: openedAt))
     }
 
-    func testDismissedMarksCancelledWithReason() throws {
+    /// 用户划掉通知 = 消息**已经到达设备**，与「投递前被应用取消」是两件完全不同的事。
+    ///
+    /// 这条用例锁死的是预算语义：把 dismissed 记成 cancelled 会让 deliveredAt 留空、
+    /// 当日额度被退还，于是用户越划越收到——正好与他的意图相反。
+    func testDismissedCountsAsDeliveredAndKeepsBudget() throws {
         let key = "geo:rule_1:enter:2026-10-12"
         try insertPendingMessage(dedupeKey: key)
 
+        let dismissedAt = fixedDate("2026-10-12T02:10:00Z")
         let service = ProactiveReceiptService(store: store)
         let outcome = try service.apply(ProactiveInteractionReceipt(
             dedupeKey: key,
             interaction: .dismissed,
+            at: dismissedAt
+        ))
+
+        XCTAssertTrue(outcome.applied)
+        XCTAssertEqual(outcome.state, .delivered, "划掉的是已经收到的通知，不是没发出去")
+        // 时间字段的含义是「交互时确认它已经到达设备」，不是系统展示时刻（系统不提供这个回执）。
+        XCTAssertEqual(outcome.deliveredAt, dismissedAt)
+
+        let row = try XCTUnwrap(try store.proactiveMessage(dedupeKey: key))
+        XCTAssertEqual(row.state, .delivered)
+        // 状态标签本身会显示成「已发出」，靠 reason 保留「用户是划掉而不是点开」的区别。
+        XCTAssertEqual(row.suppressReason, ProactiveInteraction.dismissed.stateReason)
+        XCTAssertTrue(row.state.consumesBudget, "用户关闭已收到的通知不应返还预算，否则会继续被同类提醒打扰")
+    }
+
+    /// 对照用例：`cancelled` 才是「投递前应用取消」，它确实不该占预算，也不该写 deliveredAt。
+    /// 两个方向都要有断言，否则上面那条用例可能被改成「什么状态都给预算」而依然通过。
+    func testAppCancelledBeforeDeliveryDoesNotConsumeBudget() throws {
+        let key = "geo:rule_1:enter:2026-10-12"
+        try insertPendingMessage(dedupeKey: key)
+
+        let outcome = try ProactiveReceiptService(store: store).apply(ProactiveInteractionReceipt(
+            dedupeKey: key,
+            interaction: .cancelled,
             at: fixedDate("2026-10-12T02:10:00Z")
         ))
 
         XCTAssertTrue(outcome.applied)
         XCTAssertEqual(outcome.state, .cancelled)
-        XCTAssertNil(outcome.deliveredAt, "忽略不等于送达")
+        XCTAssertNil(outcome.deliveredAt, "没发出去就没有到达时刻")
 
         let row = try XCTUnwrap(try store.proactiveMessage(dedupeKey: key))
         XCTAssertEqual(row.state, .cancelled)
-        XCTAssertEqual(row.suppressReason, ProactiveInteraction.dismissed.stateReason)
-        XCTAssertFalse(row.state.consumesBudget, "已取消的提醒不该继续占用当日预算")
+        XCTAssertFalse(row.state.consumesBudget, "确实没发出去，预算应当释放")
     }
 
     func testExpiredReceiptMarksExpired() throws {

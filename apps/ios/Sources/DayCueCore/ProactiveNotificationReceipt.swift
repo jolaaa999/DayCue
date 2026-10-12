@@ -29,15 +29,31 @@ public enum ProactiveInteraction: String, Codable, CaseIterable, Sendable {
 
     /// 对应的账本状态。
     ///
-    /// dismissed 映射成 cancelled：Schema 只有 pending/delivered/suppressed/expired/cancelled 五态，
-    /// 没有单独的「忽略」态。划掉意味着它不会再次出现，用一个明确的终态表示比留在 pending
-    /// 继续占预算要诚实得多。
+    /// dismissed 必须映射成 delivered，不能映射成 cancelled。这两件事完全不同：
+    /// - delivered 是「消息已经到达设备」（用户看到后才可能划掉），要占预算；
+    /// - cancelled 是「投递前被应用取消」（规则改了、地点删了），根本没发出去，不占预算。
+    ///
+    /// 把「用户划掉已收到的通知」记成 cancelled 的后果很具体：账本 deliveredAt 为空，
+    /// 当日额度会被**退还**，系统于是有额度继续发同类提醒——用户越划越收到，正是他想避免的。
     public var resultingState: ProactiveMessageState {
         switch self {
-        case .opened, .replied: return .delivered
-        case .dismissed: return .cancelled
+        case .opened, .replied, .dismissed: return .delivered
         case .expired: return .expired
         case .cancelled: return .cancelled
+        }
+    }
+
+    /// 这次交互是否**证明消息确实到达了设备**。
+    ///
+    /// opened / replied / dismissed 都只可能发生在用户已经看到这条通知之后，
+    /// 因此它们构成「到达设备」的可信证据（虽然只是反推，但来自用户侧，不是猜的）。
+    ///
+    /// expired / cancelled 是系统或应用单方面结束，**不构成任何到达证据**：
+    /// 极可能根本就没显示过，所以绝不能因此写下 deliveredAt。
+    public var provesDeviceReached: Bool {
+        switch self {
+        case .opened, .replied, .dismissed: return true
+        case .expired, .cancelled: return false
         }
     }
 
@@ -150,7 +166,13 @@ public struct ProactiveReceiptService {
         }
 
         let state = receipt.interaction.resultingState
-        let deliveredAt = state == .delivered ? receipt.at : nil
+
+        // deliveredAt 的准确含义是「我们最后一次确认它到达了设备的时刻」，
+        // 而**不是**「iOS 报告它被展示的时刻」—— iOS 不提供展示回执，那个时刻根本拿不到。
+        // 这里的时间来自用户交互反推（点开/回复/划掉都证明用户看见过它），
+        // 所以只在 provesDeviceReached 为真时写入；系统过期或应用取消一律留空，
+        // 否则就等于把「没送到」记成「送到了」。
+        let deliveredAt = receipt.interaction.provesDeviceReached ? receipt.at : nil
 
         try store.updateProactiveMessageState(
             id: existing.id,

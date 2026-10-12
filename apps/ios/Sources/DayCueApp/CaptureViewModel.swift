@@ -393,6 +393,11 @@ final class CaptureViewModel: ObservableObject {
             occurredAt: recordedAt
         )) ?? NoteUpsertOutcome()
 
+        // 与手动笔记一致：AI 落库成功之后才通知云同步，没有实际写入就不打扰同步队列。
+        if noteOutcome.inserted > 0 || noteOutcome.updated > 0 {
+            container.cloudSync.noteLocalChange()
+        }
+
         try? container.store.updateProposalStatus(captureId: context.captureId, status: .accepted)
         var parts = ["已按自动模式创建任务。"]
         if !noteOutcome.isEmpty { parts.append("笔记：" + noteOutcome.summaryText) }

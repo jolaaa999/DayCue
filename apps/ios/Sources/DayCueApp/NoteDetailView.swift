@@ -6,6 +6,9 @@ import DayCueCore
 /// 三件事：看完整正文、编辑（并把 userEdited 置上）、软删除。
 /// 「置 userEdited」不是可选的装饰：重试解析按这个标志决定是否覆盖正文，
 /// 少置一次，用户刚改完的字下一次解析就没了。
+///
+/// 编辑与删除都不直接调 store，而是走 NoteWriteCoordinator：它在写入成功后
+/// 统一通知云同步，手动笔记与 AI 笔记因此走同一条「写完就入队」的路径。
 struct NoteDetailView: View {
 
     @EnvironmentObject private var container: AppContainer
@@ -125,6 +128,12 @@ struct NoteDetailView: View {
                 NavigationLink("查看原始记录") {
                     CaptureDetailView(captureId: captureId)
                 }
+            } else if note.originKind == .manual {
+                // 手动创建的笔记没有来源记录可跳。把这件事说明白，
+                // 比留一个点不动的空位更符合「来源可追溯」。
+                Text("这条笔记是手动创建的，没有原始记录可跳转。")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
 
             LabeledContent("创建时间", value: RecordDisplay.utcText(note.createdAt))
@@ -179,24 +188,20 @@ struct NoteDetailView: View {
     }
 
     private func save(_ existing: NoteRecord) {
-        var updated = existing
-        updated.title = titleDraft.trimmingCharacters(in: .whitespacesAndNewlines)
-        updated.body = bodyDraft
-        updated.tags = parsedTags
-        // 顺手把标志写进待更新行：updateNote 是整行覆盖，
-        // 如果这里留 false，紧接着的 markNoteUserEdited 就变成一次无意义的补丁。
-        updated.userEdited = true
-
         do {
-            try container.store.updateNote(updated)
-            try container.store.markNoteUserEdited(id: updated.id)
-
-            if let reloaded = try container.store.note(id: updated.id) {
-                note = reloaded
-                titleDraft = reloaded.title
-                bodyDraft = reloaded.body
-                tagsDraft = reloaded.tags.joined(separator: "\n")
-            }
+            // 走 NoteWriteCoordinator：它在同一次写入里置好 userEdited、
+            // 并且只在写成功之后通知云同步。之前这里只写库不通知，
+            // 改过的笔记要等别处恰好有变更才会被推上去。
+            let saved = try container.noteWrite.updateNoteContent(
+                id: existing.id,
+                title: titleDraft,
+                body: bodyDraft,
+                tags: parsedTags
+            )
+            note = saved
+            titleDraft = saved.title
+            bodyDraft = saved.body
+            tagsDraft = saved.tags.joined(separator: "\n")
             actionMessage = "已保存。这条笔记不会再被解析重试覆盖。"
         } catch {
             actionMessage = "保存失败：\(error)"
@@ -205,9 +210,9 @@ struct NoteDetailView: View {
 
     private func performDelete() {
         do {
-            try container.store.softDeleteNote(id: noteId)
-            // 软删除已经落库，通知云同步；写失败会走 catch，不会宣称有变更。
-            container.cloudSync.noteLocalChange()
+            // 软删除与云同步通知都在协调器里：写失败会抛到这里，
+            // 不会出现"宣称删掉了/入队了，其实没写成"。
+            try container.noteWrite.deleteNote(id: noteId)
             dismiss()
         } catch {
             actionMessage = "删除失败：\(error)"
