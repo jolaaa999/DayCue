@@ -109,6 +109,13 @@ public struct GeoRuleRecord: Codable, Equatable, Sendable, Identifiable {
     /// 逗号分隔的 1...7（1 = 周一）；NULL 或空串表示每天。
     public var weekdays: String?
     public var enabled: Bool
+    /// 触发时指向的具体任务（可空）。
+    ///
+    /// 刻意不加外键：任务在本端是软删除（deleted_at），物理行会一直留着，
+    /// 外键带不来任何保护，却会让 v4 的 ADD COLUMN 必须写出建表时那套外键子句，
+    /// 写错就是真机升级时抛错。引用完整性由仓储层保证：删任务不删规则，
+    /// 规则只是不再指向任何任务。
+    public var linkedTaskID: String?
     public var expiresAtUTC: String?
     public var createdAt: String
     public var updatedAt: String
@@ -126,6 +133,7 @@ public struct GeoRuleRecord: Codable, Equatable, Sendable, Identifiable {
         activeToLocal: String? = nil,
         weekdays: String? = nil,
         enabled: Bool = true,
+        linkedTaskID: String? = nil,
         expiresAtUTC: String? = nil,
         createdAt: String,
         updatedAt: String,
@@ -142,6 +150,7 @@ public struct GeoRuleRecord: Codable, Equatable, Sendable, Identifiable {
         self.activeToLocal = activeToLocal
         self.weekdays = weekdays
         self.enabled = enabled
+        self.linkedTaskID = linkedTaskID
         self.expiresAtUTC = expiresAtUTC
         self.createdAt = createdAt
         self.updatedAt = updatedAt
@@ -407,8 +416,8 @@ public extension DayCueStore {
             INSERT INTO geo_rule
               (id, place_id, [trigger], title, body, min_dwell_seconds, cooldown_seconds,
                active_from_local, active_to_local, weekdays, enabled, expires_at_utc,
-               created_at, updated_at, deleted_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+               created_at, updated_at, deleted_at, linked_task_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
             """
         )
         try statement.bind(Self.geoRuleValues(record))
@@ -465,7 +474,7 @@ public extension DayCueStore {
             UPDATE geo_rule SET
               place_id = ?, [trigger] = ?, title = ?, body = ?, min_dwell_seconds = ?, cooldown_seconds = ?,
               active_from_local = ?, active_to_local = ?, weekdays = ?, enabled = ?, expires_at_utc = ?,
-              updated_at = ?
+              linked_task_id = ?, updated_at = ?
             WHERE id = ? AND deleted_at IS NULL;
             """
         )
@@ -481,6 +490,7 @@ public extension DayCueStore {
             .optionalText(record.weekdays),
             .bool(record.enabled),
             .optionalText(record.expiresAtUTC),
+            .optionalText(record.linkedTaskID),
             .text(record.updatedAt),
             .text(record.id)
         ])
@@ -668,7 +678,8 @@ public extension DayCueStore {
             expiresAtUTC: statement.string(11),
             createdAt: statement.string(12) ?? "",
             updatedAt: statement.string(13) ?? "",
-            deletedAt: statement.string(14)
+            deletedAt: statement.string(14),
+            linkedTaskID: statement.string(15)
         )
     }
 
@@ -705,7 +716,8 @@ public extension DayCueStore {
             .optionalText(record.expiresAtUTC),
             .text(record.createdAt),
             .text(record.updatedAt),
-            .optionalText(record.deletedAt)
+            .optionalText(record.deletedAt),
+            .optionalText(record.linkedTaskID)
         ]
     }
 }
@@ -714,6 +726,7 @@ public extension DayCueStore {
 /// [trigger] 用方括号包住：TRIGGER 是 SQLite 的关键字，直接当列名在某些语句里会被当成语法。
 let placeColumns = "id, name, latitude, longitude, radius_meters, coordinate_system, address, confirmed_by_user, created_at, updated_at, deleted_at"
 
-let geoRuleColumns = "id, place_id, [trigger], title, body, min_dwell_seconds, cooldown_seconds, active_from_local, active_to_local, weekdays, enabled, expires_at_utc, created_at, updated_at, deleted_at"
+// linked_task_id 追加在末尾而不是插在中间：取值下标一错位就是静默错列，追加能让已有下标全部不变。
+let geoRuleColumns = "id, place_id, [trigger], title, body, min_dwell_seconds, cooldown_seconds, active_from_local, active_to_local, weekdays, enabled, expires_at_utc, created_at, updated_at, deleted_at, linked_task_id"
 
 let proactiveMessageColumns = "id, kind, dedupe_key, target_ref, state, suppress_reason, scheduled_at_utc, delivered_at_utc, expires_at_utc, created_at, updated_at"

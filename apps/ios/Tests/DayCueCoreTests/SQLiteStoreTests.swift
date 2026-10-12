@@ -33,7 +33,9 @@ final class SQLiteStoreTests: XCTestCase {
         var versions: [Int] = []
         let statement = try reopened.database.prepare("SELECT version FROM schema_migrations;")
         while try statement.step() { versions.append(statement.int(0)) }
-        XCTAssertEqual(versions, [DayCueSchema.currentVersion])
+        // 迁移器是「每个版本各插一行」，不是只记最新版本；
+        // 断言成 [currentVersion] 会在第一次真正跑测试时就红。
+        XCTAssertEqual(versions, Array(1...DayCueSchema.currentVersion))
     }
 
     func testCaptureRoundTripKeepsEveryField() throws {
@@ -228,6 +230,57 @@ final class SQLiteStoreTests: XCTestCase {
 
         XCTAssertTrue(try store.taskExists(originCaptureId: "cap_1", originItemId: "itm_1"))
         XCTAssertFalse(try store.taskExists(originCaptureId: "cap_1", originItemId: "itm_2"))
+    }
+
+    /// geo_rule.linked_task_id 的往返。
+    ///
+    /// 这条守的是列顺序：该列追加在 geoRuleColumns 末尾，解码下标是 15。
+    /// 下标一旦错位就是静默读成别的列，不会抛错，只会让规则悄悄关联到错误的东西。
+    func testGeoRuleLinkedTaskRoundTrip() throws {
+        _ = try store.insertPlace(PlaceRecord(
+            id: "place_link",
+            name: "实验室",
+            latitude: 31.23,
+            longitude: 121.47,
+            radiusMeters: 200,
+            confirmedByUser: true,
+            createdAt: "2026-01-01T00:00:00Z",
+            updatedAt: "2026-01-01T00:00:00Z"
+        ))
+
+        // 有关联任务
+        let linked = GeoRuleRecord(
+            id: "rule_linked",
+            placeId: "place_link",
+            trigger: .enter,
+            title: "到实验室了",
+            linkedTaskID: "task_1",
+            createdAt: "2026-01-01T00:00:00Z",
+            updatedAt: "2026-01-01T00:00:00Z"
+        )
+        try store.insertGeoRule(linked, at: Date(timeIntervalSince1970: 0))
+        XCTAssertEqual(try store.geoRule(id: "rule_linked")?.linkedTaskID, "task_1")
+
+        // 不带关联任务也必须能存、能读回 nil（不给默认值假装有关联）
+        let unlinked = GeoRuleRecord(
+            id: "rule_unlinked",
+            placeId: "place_link",
+            trigger: .exit,
+            title: "离开实验室",
+            createdAt: "2026-01-01T00:00:00Z",
+            updatedAt: "2026-01-01T00:00:00Z"
+        )
+        try store.insertGeoRule(unlinked, at: Date(timeIntervalSince1970: 0))
+        XCTAssertNil(try store.geoRule(id: "rule_unlinked")?.linkedTaskID)
+
+        // 更新路径也要能改这一列，并且不影响同一行的其他列
+        var changed = linked
+        changed.linkedTaskID = nil
+        try store.updateGeoRule(changed, at: Date(timeIntervalSince1970: 1))
+        let reread = try store.geoRule(id: "rule_linked")
+        XCTAssertNil(reread?.linkedTaskID)
+        XCTAssertEqual(reread?.title, "到实验室了")
+        XCTAssertEqual(reread?.trigger, .enter)
     }
 
     func testWipeAllDataClearsRowsButKeepsSchema() throws {

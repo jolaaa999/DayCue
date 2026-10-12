@@ -6,7 +6,7 @@ import Foundation
 /// 一旦用户设备上已经有数据，就必须靠版本号滚动升级，不能靠 IF NOT EXISTS 糊过去。
 public enum DayCueSchema {
 
-    public static let currentVersion = 3
+    public static let currentVersion = 4
 
     public static func migrate(_ database: SQLiteDatabase) throws {
         try database.execute(
@@ -48,6 +48,8 @@ public enum DayCueSchema {
             try database.execute(v2)
         case 3:
             try database.execute(v3)
+        case 4:
+            try database.execute(v4)
         default:
             throw SQLiteError.execFailed(code: 0, message: "未知的迁移版本 \(version)")
         }
@@ -64,6 +66,18 @@ public enum DayCueSchema {
     /// 不是拿一个默认值掩盖「我们不知道」。
     private static let v3 = """
     ALTER TABLE place ADD COLUMN coordinate_system TEXT NOT NULL DEFAULT 'wgs84';
+    """
+
+    /// v4：给 geo_rule 补一列关联任务。
+    ///
+    /// 为什么现在补：Android 端已经有这一列（同一轮加上的），两端不同步会让
+    /// 「规则能关联任务」这件事只在一边成立，用户换设备就丢。
+    /// 不加外键，理由与 Android 一致：任务在本端是软删除，物理行一直留着，
+    /// 外键带不来保护，却会让 ADD COLUMN 必须写出建表时那套约束子句。
+    ///
+    /// 可空且不给默认值：没有关联任务是正常状态，给默认值等于假装有。
+    private static let v4 = """
+    ALTER TABLE geo_rule ADD COLUMN linked_task_id TEXT;
     """
 
 

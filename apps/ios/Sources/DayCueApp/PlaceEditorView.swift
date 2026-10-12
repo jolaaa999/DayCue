@@ -34,6 +34,12 @@ struct PlaceEditorView: View {
     @State private var newFromMinutes = 8 * 60
     @State private var newToMinutes = 22 * 60
     @State private var newWeekdays: Set<Int> = [1, 2, 3, 4, 5]
+    /// 可关联的任务：只取未完成的。关联可选，所以列表为空也允许保存。
+    @State private var linkableTasks: [TaskRecord] = []
+    @State private var newLinkedTaskID: String?
+    /// 任务 id → 标题。已关联的任务可能后来被标记完成，不在 linkableTasks 里，
+    /// 所以标题单独存一份，否则列表里会显示成「已关联的任务已删除」这种误导性文案。
+    @State private var taskTitles: [String: String] = [:]
 
     init(placeId: String?) {
         self.placeId = placeId
@@ -180,6 +186,11 @@ struct PlaceEditorView: View {
         }
         parts.append("冷却 \(max(rule.cooldownSeconds / 60, 0)) 分钟")
         parts.append(GeoRuleWeekdays.displayText(rule.weekdays))
+        if let linked = rule.linkedTaskID {
+            // 用 id 而不是标题兜底：任务被删掉时，显示 id 至少能让人查得到，
+            // 显示「未知任务」则什么线索都没有。
+            parts.append("关联 \(taskTitles[linked] ?? linked)")
+        }
         if let from = rule.activeFromLocal, let to = rule.activeToLocal, !from.isEmpty, !to.isEmpty {
             parts.append("\(from)–\(to)")
         } else {
@@ -217,6 +228,13 @@ struct PlaceEditorView: View {
                 Text("生效星期")
                     .font(.subheadline)
                 weekdayPicker
+            }
+
+            Picker("关联任务（可选）", selection: $newLinkedTaskID) {
+                Text("不关联").tag(String?.none)
+                ForEach(linkableTasks, id: \.id) { task in
+                    Text(task.title).tag(String?.some(task.id))
+                }
             }
 
             Button("添加规则") { addRule() }
@@ -268,7 +286,22 @@ struct PlaceEditorView: View {
 
     // MARK: - 数据
 
+    /// 读出可关联的任务与标题表。
+    ///
+    /// 关联任务只是可选上下文，所以读失败不清空已有选择、也不拦住保存。
+    private func loadLinkableTasks() {
+        do {
+            let all = try container.store.tasks()
+            taskTitles = Dictionary(all.map { ($0.id, $0.title) }, uniquingKeysWith: { first, _ in first })
+            linkableTasks = all.filter { $0.status == .open }
+        } catch {
+            taskTitles = [:]
+            linkableTasks = []
+        }
+    }
+
     private func load() {
+        loadLinkableTasks()
         guard let existingId = activePlaceId else { return }
         do {
             guard let existing = try container.store.place(id: existingId) else {
@@ -426,6 +459,7 @@ struct PlaceEditorView: View {
             activeToLocal: newUsesWindow ? ClockEditing.text(minutes: newToMinutes) : nil,
             weekdays: GeoRuleWeekdays.encode(Array(newWeekdays)),
             enabled: true,
+            linkedTaskID: newLinkedTaskID,
             expiresAtUTC: nil,
             createdAt: now,
             updatedAt: now
