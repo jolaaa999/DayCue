@@ -16,6 +16,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/jolaaa999/DayCue/services/api/internal/authn"
@@ -199,7 +200,8 @@ func (h *AccountHandler) requireUserHandler(next http.Handler) http.Handler {
 		}
 		// 令牌是自包含的、无法单独撤销，所以每次请求都要确认账号仍然存在：
 		// 否则删号之后旧令牌还能继续往里写数据。
-		if _, err := h.deps.Users.UserByID(r.Context(), userID); err != nil {
+		user, err := h.deps.Users.UserByID(r.Context(), userID)
+		if err != nil {
 			if errors.Is(err, store.ErrNotFound) {
 				writeUnauthorized(w, r)
 				return
@@ -207,8 +209,41 @@ func (h *AccountHandler) requireUserHandler(next http.Handler) http.Handler {
 			writeInternal(w, r, err)
 			return
 		}
+		// 顺手对齐客户端上报的时区。放在这里而不是单开一个端点，是因为用户行**已经**
+		// 被读出来了：为了一个附属字段再查一次库不划算。
+		h.syncReportedTimeZone(r.Context(), user, r.Header.Get(headerReportedTimezone))
 		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), ctxKeyUserID{}, userID)))
 	})
+}
+
+// headerReportedTimezone 是客户端上报 IANA 时区名的请求头。
+//
+// 用请求头而不是设备载荷里的字段，是因为时区描述的是**用户当前所在**的位置，
+// 会随出行变化，并且与具体是哪台设备无关。放头里可以让服务端在每个请求上都跟上变化，
+// 而不必等下一次设备登记。两个客户端已经这样发（iOS DayCueAPI、Android DayCueApiClient），
+// 这里只是把服务端一直忽略的这个头接上。
+const headerReportedTimezone = "X-DayCue-Timezone"
+
+// syncReportedTimeZone 在客户端上报的时区与库里存的不同时更新它。
+//
+// 几个刻意的取舍：
+//   - 只在**不同**时写库。每个请求都写一次会把该行的 updated_at 刷爆，
+//     也白白放大 WAL；而时区在一天里几乎不会变。
+//   - 空值直接忽略。空串在存储层有明确的语义（"未知"，读时回退 UTC），
+//     如果一个漏发了头的客户端能把用户的时区抹成"未知"，那用户的预算与静默时段
+//     就会莫名其妙地按 UTC 计算，且没有任何提示。
+//   - 非法值只记日志、不失败请求。时区是环境的附属信息，
+//     为了一个畸形的头让整个请求 500/422，代价远大于按旧时区多算一天。
+func (h *AccountHandler) syncReportedTimeZone(ctx context.Context, user store.User, reported string) {
+	raw := strings.TrimSpace(reported)
+	if raw == "" || raw == user.TimeZone {
+		return
+	}
+	if err := h.deps.Users.SetUserTimeZone(ctx, user.ID, raw, h.now()); err != nil {
+		// 存储层会拒绝无法识别的时区名；这里不把它升级成请求失败。
+		slog.Warn("客户端上报的时区无法使用，已按旧值继续",
+			"user_id", user.ID, "reported", raw, "error", err.Error())
+	}
 }
 
 // writeUnauthorized 统一 401 文案：不区分"没有令牌""令牌坏""账号已删除"，

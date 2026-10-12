@@ -50,6 +50,14 @@ func main() {
 		slog.Error("主动推送初始化失败，拒绝启动", "error", err.Error())
 		os.Exit(1)
 	}
+
+	// 候选生产者：把客户端同步上来的到期业务事件写进账本。
+	// 没有数据库时同样返回 nil（明确不启动），而不是造一个永远查不到东西的生产者。
+	pushProducer, err := newProactiveProducer(cfg, cloudStore)
+	if err != nil {
+		slog.Error("主动候选生产者初始化失败，拒绝启动", "error", err.Error())
+		os.Exit(1)
+	}
 	rootHandler := http.Handler(srv.Handler())
 	if cloudHandler != nil {
 		rootHandler = cloudHandler
@@ -81,6 +89,11 @@ func main() {
 	if pushRunner != nil {
 		// 主动推送调度后台运行；单轮错误只记日志，不会拖垮 HTTP 服务。
 		go pushRunner.Start(runCtx, pushInterval)
+	}
+	if pushProducer != nil {
+		// 生产者与调度器共用同一个 runCtx，也共用同一个间隔。
+		// 各跑各的循环：生产者只把事件变成账本行，本轮产出的行会在调度的下一次 tick 被认领。
+		go pushProducer.Start(runCtx, pushInterval)
 	}
 	if cfg.FixtureMode {
 		slog.Warn("模拟模式已开启：所有整理结果都是预设样例，不构成真实 AI 调用，界面上会标记为「模拟结果」")

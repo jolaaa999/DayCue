@@ -73,6 +73,24 @@ type PushConfig struct {
 	Interval time.Duration
 	// ClaimLimit 是单轮最多认领条数。
 	ClaimLimit int
+	// Lease 是领取租约时长；<=0 时用 proactive.DefaultLease。
+	//
+	// 为什么可配：租约为 0 会让"刚领取即可被抢走"，等于没有互斥；
+	// 而取得过长会让崩溃进程留下的行迟迟无法回收。
+	Lease time.Duration
+	// MaxAttempts 是单条消息允许被领取的最大次数；<=0 时用 proactive.DefaultMaxAttempts。
+	// 必须有上限，否则一条永远失败的行会被无限重试，每轮再占一次当日额度。
+	MaxAttempts int
+	// RecoverLimit 是单轮最多回收的过期租约条数；<=0 时用 ClaimLimit。
+	RecoverLimit int
+
+	// ProduceLookback 是候选生产者回看多久之内到期的业务事件。
+	//
+	// 它存在的意义与客户端追问策略里的补发宽限同源：设备离线一整天后重开时，
+	// 补一堆昨天的提醒比不提醒更糟。超过窗口的事件不再生成候选。
+	ProduceLookback time.Duration
+	// ProduceLimit 是生产者单轮最多处理多少条事件，防止首次接入时一次性灌满账本。
+	ProduceLimit int
 }
 
 // MissingAPNsEnv 返回 APNs 缺失的必填环境变量名；为空表示凭据齐全。
@@ -160,6 +178,11 @@ func Load() Config {
 		FCMEndpoint:           os.Getenv("DAYCUE_FCM_ENDPOINT"),
 		Interval:              envDuration("DAYCUE_PROACTIVE_INTERVAL", time.Minute),
 		ClaimLimit:            int(envInt64("DAYCUE_PROACTIVE_CLAIM_LIMIT", 50)),
+		Lease:                 envDuration("DAYCUE_PROACTIVE_LEASE", 15*time.Minute),
+		MaxAttempts:           int(envInt64("DAYCUE_PROACTIVE_MAX_ATTEMPTS", 4)),
+		RecoverLimit:          int(envInt64("DAYCUE_PROACTIVE_RECOVER_LIMIT", 100)),
+		ProduceLookback:       envDuration("DAYCUE_PROACTIVE_LOOKBACK", 2*time.Hour),
+		ProduceLimit:          int(envInt64("DAYCUE_PROACTIVE_PRODUCE_LIMIT", 200)),
 	}
 	return c
 }
