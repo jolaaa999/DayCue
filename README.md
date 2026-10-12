@@ -8,10 +8,11 @@
 
 | 部分 | 状态 |
 |---|---|
-| Go 后端 `services/api` | **已实现、已编译、已测试、已端到端验证**（23/23 项断言通过） |
-| 契约 `contracts/` | 已落地，并由后端测试强制执行 |
-| iOS 端 `apps/ios` | **源码已完成**；跨平台单元测试 **12 个文件 / 85 个用例，已运行 0 个**；**尚未编译、尚未真机验证** |
-| 课表 / 课后追问 / 长期记忆 / 位置 / Android | 未实现（第二至第四阶段） |
+| Go 后端 `services/api` | **已实现、已编译、已测试**：124 个测试用例全部通过；另有 `verify-api.ps1` 的 23 项真实 HTTP 端到端断言 |
+| 契约 `contracts/` | 已落地，并由后端测试强制执行。**注意：账号 / 设备 / 同步 / 媒体 / 导出端点尚未写入 contracts** |
+| iOS 端 `apps/ios` | **源码已完成**：DayCueCore 44 个文件 + DayCueApp 43 个文件；测试 25 个文件 / **236 个用例，已运行 0 个**；**尚未编译、尚未真机验证** |
+| Android 端 `apps/android` | **源码已完成**：90 个 Kotlin 文件；JVM 单元测试 **124 个用例，已运行 0 个**；仪器测试 8 个待设备；**尚未编译**（本机缺 Android SDK 与 Gradle wrapper） |
+| 课表 / 课后追问 / 长期记忆 / 位置与主动规则 / 苹果侧对账 | **源码已完成**（iOS 与 Android 双端），均**未编译、未运行** |
 
 iOS 端之所以未验证：开发环境是 Windows，没有 Xcode 与 Swift 工具链。按 Xcode 版本拼凑的"已验证"结论是不诚实的，因此这里明确标注为**未验证**，并在 [apps/ios/README.md](apps/ios/README.md) 给出了 Mac 上的完整构建与真机验证步骤。
 
@@ -39,14 +40,16 @@ scripts/
   verify-api.ps1                一键验收：构建 + 测试 + 真实 HTTP 端到端断言
   ios/verify-ios.sh             Mac 上一键验证：swift test + 生成工程 + 构建
   ios/static-check.ps1          Windows 上可跑的静态检查（只能证明结构自洽）
-services/api/             Go 最小后端（无状态）
+docs/implementation-plan.md    功能完成矩阵（源码/构建/测试/设备四列）与未验证清单
+services/api/             Go 后端（AI 端点 + 可选账号/同步/媒体端点）
 apps/ios/                 SwiftUI 应用（DayCueCore 跨平台逻辑 + DayCueApp 界面）
+apps/android/             Kotlin + Compose + Room 客户端（未编译）
 proactive-assistant-design.md   产品与技术设计原文
 ```
 
 ## 5 分钟跑起来（后端）
 
-需要 Go 1.23+。**不需要任何 API Key**：
+需要 Go 1.24+。**不需要任何 API Key，也不需要数据库**（账号与云同步是可选能力）：
 
 ```powershell
 git clone https://github.com/jolaaa999/DayCue.git
@@ -105,10 +108,14 @@ open DayCue.xcodeproj
 
 ## 阶段路线
 
-- **第一阶段（本仓库已完成的后端 + 已编写待验证的 iOS）**：捕获 → 整理 → 确认 → 本地任务 + 苹果提醒事项。
-- 第二阶段：手动课表、课程实例、预计结束后的本地追问、回复归档。
-- 第三阶段：可追溯长期记忆，查看 / 修改 / 删除，失效机制。
-- 第四阶段：位置提醒、双向同步、Android 客户端。
+七个功能域（捕获与确认 / 课表与课后追问 / 长期记忆 / 位置与主动规则 / 苹果侧对账 / Android 客户端 / 后端与云同步）的**源码已在本次交付中全部完成**，逐项状态见 [docs/implementation-plan.md](docs/implementation-plan.md) 的功能完成矩阵。
+
+矩阵分四列：源码实现 / 当前环境构建 / 自动化测试 / 系统集成或设备验证。当前的真实情况是：
+
+- **Go 后端**：源码、构建、自动化测试三列完成；PostgreSQL 真实行为**未验证**（本机无 psql、无 Docker、默认构建不含数据库驱动）。
+- **iOS / Android**：只有「源码实现」一列完成，其余三列**全部未验证** —— 本机没有 macOS、Xcode、Android SDK 与 Gradle。
+
+**源码写完不等于功能可用**：iOS 的 EventKit 写入、定位、通知，Android 的权限与后台任务，都必须在真机上验收后才能说「可用」。
 
 课表结束不等于实际下课；后台任务不保证准点；位置只是区域级线索；AI 推断不会自动升级为「用户事实」。这些限制写在 [docs/product-scope.md](docs/product-scope.md)。
 
