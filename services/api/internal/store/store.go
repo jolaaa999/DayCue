@@ -64,9 +64,15 @@ type User struct {
 	Email        string
 	DisplayName  string
 	PasswordHash string
-	CreatedAt    time.Time
-	UpdatedAt    time.Time
-	DeletedAt    *time.Time
+	// TimeZone 是用户上报的 IANA 时区名（例如 Asia/Shanghai）。
+	//
+	// 语义与库里的可空列一致：空串表示**未知**，读取时必须回退 UTC（见 store.UserTimeZone）。
+	// "未知"与"UTC"刻意区分开：前者是没信息，后者是一个确定的选择。
+	// 凡是与"今天""静默时段"有关的判定都必须按它来，而账本里的绝对时刻一律仍存 UTC。
+	TimeZone  string
+	CreatedAt time.Time
+	UpdatedAt time.Time
+	DeletedAt *time.Time
 }
 
 // Device 是一台已登记的客户端设备。
@@ -127,6 +133,14 @@ type UserStore interface {
 	UserByEmail(ctx context.Context, email string) (User, error)
 	UserByID(ctx context.Context, id string) (User, error)
 	SoftDeleteUser(ctx context.Context, id string, at time.Time) error
+	// SetUserTimeZone 写入 IANA 时区名；空串表示清空为"未知"。
+	// 非法时区名必须被拒绝：写进去读不出来的值等于用户以为自己设了时区、实际按 UTC 算。
+	SetUserTimeZone(ctx context.Context, userID string, tz string, at time.Time) error
+	// UserTimeZone 返回用户时区名（原样，可能为空串表示未知）。
+	//
+	// 返回名字而不是 *time.Location：本包不替调用方决定"未知时用什么"，
+	// 回退策略由调用方（调度层）显式给出，免得两处口径不一致。
+	UserTimeZone(ctx context.Context, userID string) (string, error)
 
 	UpsertDevice(ctx context.Context, d Device) error
 	DeviceByID(ctx context.Context, userID, id string) (Device, error)

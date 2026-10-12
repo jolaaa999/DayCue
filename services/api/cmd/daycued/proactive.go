@@ -82,18 +82,34 @@ func newProactiveRunner(cfg config.Config, pg *store.Postgres) (*proactive.Runne
 	if err != nil {
 		return nil, 0, "", fmt.Errorf("构造主动推送调度器失败: %w", err)
 	}
-	// 用户时区暂统一按 UTC：按用户真实时区判定静默与预算需要额外读取用户偏好，
-	// 本轮没有接线，跨时区用户的"今天"与静默时段会按 UTC 计算（见交付说明）。
-	utc := func(string) *time.Location { return time.UTC }
-	scheduler.LocationOf = utc
+	// 用户时区从库里读（app_user.timezone，IANA 名）。读不到或为空时在存储层回退 UTC：
+	// 预算、静默时段、每日重置都按用户本地自然日算，账本里的绝对时刻仍一律存 UTC。
+	//
+	// 这里同步读取（LocationOf 签名不带 ctx）是刻意的：调度器与 runner 的时区判定
+	// 必须在一轮内保持一致，异步预取会让同一轮里出现两个"今天"。
+	locationOf := func(userID string) *time.Location {
+		loc, err := pg.UserLocation(context.Background(), userID)
+		if err != nil {
+			slog.Warn("读取用户时区失败，本轮按 UTC 计算", "user_id", userID, "cause", err.Error())
+			return time.UTC
+		}
+		return loc
+	}
+	scheduler.LocationOf = locationOf
 
 	runner := &proactive.Runner{
-		Ledger:     ledgerAdapter{pg: pg},
-		Devices:    deviceAdapter{pg: pg, deliverable: platformDeliverable(router)},
-		Scheduler:  scheduler,
-		LocationOf: utc,
-		Now:        now,
-		ClaimLimit: cfg.Push.ClaimLimit,
+		Ledger:         ledgerAdapter{pg: pg},
+		Devices:        deviceAdapter{pg: pg, deliverable: platformDeliverable(router)},
+		Scheduler:      scheduler,
+		LocationOf:     locationOf,
+		LocationSource: pg.UserLocation,
+		Now:            now,
+		ClaimLimit:     cfg.Push.ClaimLimit,
+		ClaimedBy:      claimedBy(),
+		Lease:          cfg.Push.Lease,
+		MaxAttempts:    cfg.Push.MaxAttempts,
+		RecoverLimit:   cfg.Push.RecoverLimit,
+		DailyBudgetFor: func(string) int { return scheduler.Policy.DailyBudget },
 	}
 
 	interval := cfg.Push.Interval
@@ -190,35 +206,71 @@ func buildFCM(p config.PushConfig, now func() time.Time) (push.Sender, error) {
 
 type ledgerAdapter struct{ pg *store.Postgres }
 
-func (a ledgerAdapter) ClaimDueProactive(ctx context.Context, now time.Time, limit int) ([]proactive.Claim, error) {
-	rows, err := a.pg.ClaimDueProactive(ctx, now, limit)
+func (a ledgerAdapter) ClaimDueProactive(ctx context.Context, req proactive.ClaimRequest) (proactive.ClaimBatch, error) {
+	batch, err := a.pg.ClaimDueProactive(ctx, store.ProactiveClaimRequest{
+		Now:           req.Now,
+		Limit:         req.Limit,
+		ClaimedBy:     req.ClaimedBy,
+		Lease:         req.Lease,
+		MaxAttempts:   req.MaxAttempts,
+		DailyLimitFor: req.DailyLimitFor,
+		LocationFor:   req.LocationFor,
+	})
 	if err != nil {
-		return nil, err
+		return proactive.ClaimBatch{}, err
 	}
-	out := make([]proactive.Claim, 0, len(rows))
-	for _, r := range rows {
-		out = append(out, proactive.Claim{
-			ID:          r.ID,
-			UserID:      r.UserID,
-			Kind:        r.Kind,
-			DedupeKey:   r.DedupeKey,
-			ScheduledAt: r.ScheduledAt,
-			ExpiresAt:   r.ExpiresAt,
-			Title:       r.Title,
-			Body:        r.Body,
-			DeepLink:    r.DeepLink,
-			Data:        r.Data,
+	out := proactive.ClaimBatch{
+		Claims:          make([]proactive.Claim, 0, len(batch.Claims)),
+		OverBudgetUsers: batch.OverBudgetUsers,
+	}
+	for _, c := range batch.Claims {
+		out.Claims = append(out.Claims, proactive.Claim{
+			ID:             c.ID,
+			UserID:         c.UserID,
+			Kind:           c.Kind,
+			DedupeKey:      c.DedupeKey,
+			ScheduledAt:    c.ScheduledAt,
+			ExpiresAt:      c.ExpiresAt,
+			Title:          c.Title,
+			Body:           c.Body,
+			DeepLink:       c.DeepLink,
+			Data:           c.Data,
+			ClaimToken:     c.ClaimToken,
+			LeaseExpiresAt: c.LeaseExpiresAt,
+			AttemptCount:   c.AttemptCount,
+			DeliveryID:     c.DeliveryID,
 		})
 	}
 	return out, nil
 }
 
-func (a ledgerAdapter) ReleaseProactive(ctx context.Context, id string, reason string, at time.Time) error {
-	return a.pg.ReleaseProactive(ctx, id, reason, at)
+func (a ledgerAdapter) SettleProactive(ctx context.Context, req proactive.SettleRequest) error {
+	return a.pg.SettleProactive(ctx, store.ProactiveSettleRequest{
+		ID:             req.ID,
+		Token:          req.Token,
+		State:          req.State,
+		SuppressReason: req.SuppressReason,
+		DeliveredAt:    req.DeliveredAt,
+		DeliveryStatus: req.DeliveryStatus,
+		At:             req.At,
+		RetryAfter:     req.RetryAfter,
+	})
 }
 
-func (a ledgerAdapter) MarkProactiveResult(ctx context.Context, id string, state string, suppressReason string, deliveredAt *time.Time, at time.Time) error {
-	return a.pg.MarkProactiveResult(ctx, id, state, suppressReason, deliveredAt, at)
+func (a ledgerAdapter) RecoverExpiredProactive(ctx context.Context, now time.Time, limit int, lease time.Duration, maxAttempts int) (proactive.RecoverResult, error) {
+	res, err := a.pg.RecoverExpiredProactive(ctx, now, limit, lease, maxAttempts)
+	if err != nil {
+		return proactive.RecoverResult{}, err
+	}
+	return proactive.RecoverResult{Requeued: res.Requeued, Expired: res.Expired, Extended: res.Extended}, nil
+}
+
+func (a ledgerAdapter) BeginProactiveDelivery(ctx context.Context, id string, token string, at time.Time) error {
+	return a.pg.BeginProactiveDelivery(ctx, id, token, at)
+}
+
+func (a ledgerAdapter) UserLocation(ctx context.Context, userID string) (*time.Location, error) {
+	return a.pg.UserLocation(ctx, userID)
 }
 
 func (a ledgerAdapter) ProactiveHistory(ctx context.Context, userID string, dedupeKey string, kind string, now time.Time, loc *time.Location) (proactive.HistoryFacts, error) {
@@ -229,6 +281,8 @@ func (a ledgerAdapter) ProactiveHistory(ctx context.Context, userID string, dedu
 	return proactive.HistoryFacts{
 		DeliveredToday:        facts.DeliveredToday,
 		ClaimedToday:          facts.ClaimedToday,
+		ReservedToday:         facts.ReservedToday,
+		UnknownToday:          facts.UnknownToday,
 		LastDeliveredSameKey:  facts.LastDeliveredSameKey,
 		LastDeliveredSameKind: facts.LastDeliveredSameKind,
 		SameKeyDeliveredToday: facts.SameKeyDeliveredToday,
@@ -425,4 +479,17 @@ func truncateForLog(s string, max int) string {
 		return s
 	}
 	return string(runes[:max]) + "..."
+}
+
+// claimedBy 生成本调度进程的稳定标识：主机名 + pid。
+//
+// 为什么不用随机值：租约上的 claimed_by 是给排障用的——"这条被谁领走了"必须能定位到
+// 具体一台机器上的具体进程。随机值只能回答"是某个进程"，等于没有信息。
+// 取不到主机名时退回 "daycued"：标识为空会让租约记录失去可读性。
+func claimedBy() string {
+	host, err := os.Hostname()
+	if err != nil || strings.TrimSpace(host) == "" {
+		return "daycued"
+	}
+	return fmt.Sprintf("daycued@%s:%d", host, os.Getpid())
 }

@@ -303,7 +303,8 @@ func TestIntegrationMigrationUpgradesOldDatabase(t *testing.T) {
 		t.Fatalf("参考库跑完整迁移失败: %v", err)
 	}
 	// 先确认参考结构自身完整：否则"升级结果 == 参考结构"可能因为两边都缺表而假通过。
-	wantTables := []string{"app_user", "device", "media_object", "memory_index", "memory_item", "proactive_message", "schema_migration", "sync_record"}
+	// proactive_budget_window 是 0003 新增的每日预算预留窗口表，属于当前版本应有的结构。
+	wantTables := []string{"app_user", "device", "media_object", "memory_index", "memory_item", "proactive_budget_window", "proactive_message", "schema_migration", "sync_record"}
 	if got := schemaTables(t, fresh, freshSchema); !reflect.DeepEqual(got, wantTables) {
 		t.Fatalf("完整迁移后的表集合 %v 与预期 %v 不一致", got, wantTables)
 	}

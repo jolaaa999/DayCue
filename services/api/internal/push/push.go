@@ -69,8 +69,15 @@ type Message struct {
 	// DedupeKey 用于幂等：同一条消息重试时供应商侧不应产生两条通知。
 	// APNs 映射到 apns-collapse-id，FCM 映射到 android.collapse_key。
 	DedupeKey string
-	Title     string
-	Body      string
+	// DeliveryID 是服务端账本里的稳定投递标识（proactive_message.delivery_id）。
+	//
+	// 与 DedupeKey 的分工：DedupeKey 表达"这条提醒在业务上是不是同一条"（跨重新领取
+	// 也稳定，用于让供应商合并通知）；DeliveryID 表达"这一次投递是哪一次"
+	// （同一次租约内稳定，重新领取会换新），用于事后按同一标识与供应商对账。
+	// 它**不**构成跨外部推送系统的 exactly-once：是否真的按它去重取决于供应商语义。
+	DeliveryID string
+	Title      string
+	Body       string
 	// DeepLink 是点击后打开的客户端路由。
 	DeepLink string
 	// ScheduledAt 是业务希望发出的时刻，仅作为供应商侧的展示依据。

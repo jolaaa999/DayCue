@@ -96,6 +96,38 @@ func (m *Memory) SoftDeleteUser(ctx context.Context, id string, at time.Time) er
 	return nil
 }
 
+// SetUserTimeZone 写入用户时区；空串表示清空为"未知"。
+func (m *Memory) SetUserTimeZone(ctx context.Context, userID string, tz string, at time.Time) error {
+	normalized, err := normalizeTimeZone(tz)
+	if err != nil {
+		return err
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	u, ok := m.users[userID]
+	if !ok || u.DeletedAt != nil {
+		return ErrNotFound
+	}
+	u.TimeZone = normalized
+	u.UpdatedAt = at
+	m.users[userID] = u
+	return nil
+}
+
+// UserTimeZone 返回用户时区名；未知时返回空串而不是 UTC。
+//
+// 刻意不在这里回退 UTC：回退是**策略**，属于调度层的决定；
+// 存储层替调用方做决定会让"未知"这个事实彻底消失。
+func (m *Memory) UserTimeZone(ctx context.Context, userID string) (string, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	u, ok := m.users[userID]
+	if !ok || u.DeletedAt != nil {
+		return "", ErrNotFound
+	}
+	return u.TimeZone, nil
+}
+
 func (m *Memory) UpsertDevice(ctx context.Context, d Device) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()

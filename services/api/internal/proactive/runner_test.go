@@ -19,10 +19,12 @@ import (
 type ledgerFake struct {
 	claims       []Claim
 	claimErr     error
-	claimFn      func(ctx context.Context, now time.Time, limit int) ([]Claim, error)
+	claimFn      func(ctx context.Context, req ClaimRequest) (ClaimBatch, error)
 	historyFn    func(ctx context.Context, userID, dedupeKey, kind string, now time.Time, loc *time.Location) (HistoryFacts, error)
-	releaseFn    func(ctx context.Context, id, reason string, at time.Time) error
-	markFn       func(ctx context.Context, id, state, reason string, deliveredAt *time.Time, at time.Time) error
+	settleFn     func(ctx context.Context, req SettleRequest) error
+	beginFn      func(ctx context.Context, id, token string, at time.Time) error
+	recoverFn    func(ctx context.Context, now time.Time, limit int, lease time.Duration, maxAttempts int) (RecoverResult, error)
+	locationFn   func(ctx context.Context, userID string) (*time.Location, error)
 	markDeviceFn func(ctx context.Context, userID, deviceID string, at time.Time) error
 	cancelFn     func(ctx context.Context, userID, deviceID string, at time.Time) (int, error)
 	assignFn     func(ctx context.Context, id, deviceID string, at time.Time) error
@@ -30,6 +32,8 @@ type ledgerFake struct {
 	claimCalls  int
 	released    []releasedCall
 	marked      []markedCall
+	settles     []SettleRequest
+	begun       []string
 	invalidated []string
 	cancelled   []string
 	assigned    []string
@@ -47,26 +51,40 @@ type markedCall struct {
 	deliveredAt *time.Time
 }
 
-func (f *ledgerFake) ClaimDueProactive(ctx context.Context, now time.Time, limit int) ([]Claim, error) {
+func (f *ledgerFake) ClaimDueProactive(ctx context.Context, req ClaimRequest) (ClaimBatch, error) {
 	f.claimCalls++
 	if f.claimFn != nil {
-		return f.claimFn(ctx, now, limit)
+		return f.claimFn(ctx, req)
 	}
-	return f.claims, f.claimErr
+	return ClaimBatch{Claims: f.claims}, f.claimErr
 }
 
-func (f *ledgerFake) ReleaseProactive(ctx context.Context, id string, reason string, _ time.Time) error {
-	f.released = append(f.released, releasedCall{id: id, reason: reason})
-	if f.releaseFn != nil {
-		return f.releaseFn(ctx, id, reason, time.Time{})
+func (f *ledgerFake) SettleProactive(ctx context.Context, req SettleRequest) error {
+	f.settles = append(f.settles, req)
+	// 把结算同时投影到 released / marked 两个视图：
+	// released 表达"回到了待领取"，marked 表达"落了某个状态"，两条用例各自只读自己关心的那个。
+	if req.State == "pending" {
+		f.released = append(f.released, releasedCall{id: req.ID, reason: req.SuppressReason})
+	} else {
+		f.marked = append(f.marked, markedCall{id: req.ID, state: req.State, reason: req.SuppressReason, deliveredAt: req.DeliveredAt})
+	}
+	if f.settleFn != nil {
+		return f.settleFn(ctx, req)
 	}
 	return nil
 }
 
-func (f *ledgerFake) MarkProactiveResult(ctx context.Context, id string, state string, reason string, deliveredAt *time.Time, _ time.Time) error {
-	f.marked = append(f.marked, markedCall{id: id, state: state, reason: reason, deliveredAt: deliveredAt})
-	if f.markFn != nil {
-		return f.markFn(ctx, id, state, reason, deliveredAt, time.Time{})
+func (f *ledgerFake) RecoverExpiredProactive(ctx context.Context, now time.Time, limit int, lease time.Duration, maxAttempts int) (RecoverResult, error) {
+	if f.recoverFn != nil {
+		return f.recoverFn(ctx, now, limit, lease, maxAttempts)
+	}
+	return RecoverResult{}, nil
+}
+
+func (f *ledgerFake) BeginProactiveDelivery(ctx context.Context, id, token string, at time.Time) error {
+	f.begun = append(f.begun, id)
+	if f.beginFn != nil {
+		return f.beginFn(ctx, id, token, at)
 	}
 	return nil
 }
@@ -76,6 +94,13 @@ func (f *ledgerFake) ProactiveHistory(ctx context.Context, userID, dedupeKey, ki
 		return f.historyFn(ctx, userID, dedupeKey, kind, now, loc)
 	}
 	return HistoryFacts{}, nil
+}
+
+func (f *ledgerFake) UserLocation(ctx context.Context, userID string) (*time.Location, error) {
+	if f.locationFn != nil {
+		return f.locationFn(ctx, userID)
+	}
+	return time.UTC, nil
 }
 
 func (f *ledgerFake) MarkDeviceInvalid(ctx context.Context, userID, deviceID string, _ time.Time) error {
@@ -148,6 +173,12 @@ func runnerClaim(userID, id, key string) Claim {
 		ID: id, UserID: userID, Kind: "geo", DedupeKey: key,
 		ScheduledAt: schedNow.Add(-time.Minute),
 		Title:       "该复习了", Body: "还有 3 天考试",
+		// 真实实现里每一条领取都必然带凭证与租约；替身也带上，
+		// 否则"旧执行者的回执被拒"这条规则在单测里根本无从验证。
+		ClaimToken:     "ctk_" + id,
+		LeaseExpiresAt: schedNow.Add(DefaultLease),
+		AttemptCount:   1,
+		DeliveryID:     "del_" + id,
 	}
 }
 
@@ -229,7 +260,7 @@ func TestRunnerSuppressedReleasesReservation(t *testing.T) {
 		claims: []Claim{runnerClaim("usr_1", "m1", "k1")},
 		historyFn: func(context.Context, string, string, string, time.Time, *time.Location) (HistoryFacts, error) {
 			// 当日已发出 3 条，正好达到 testPolicy(3) 的预算上限。
-			return HistoryFacts{DeliveredToday: 3, ClaimedToday: 1}, nil
+			return HistoryFacts{DeliveredToday: 3, ReservedToday: 1}, nil
 		},
 	}
 	sender := &recordingSender{}
@@ -366,9 +397,9 @@ func TestRunnerDeviceInvalidStopsDevice(t *testing.T) {
 // 之后所有主动提醒静默停摆，而日志里却只有一条错误。
 func TestRunnerStartSurvivesRoundErrors(t *testing.T) {
 	called := make(chan struct{}, 16)
-	led := &ledgerFake{claimFn: func(context.Context, time.Time, int) ([]Claim, error) {
+	led := &ledgerFake{claimFn: func(context.Context, ClaimRequest) (ClaimBatch, error) {
 		called <- struct{}{}
-		return nil, errors.New("数据库暂时不可用")
+		return ClaimBatch{}, errors.New("数据库暂时不可用")
 	}}
 	runner := newRunnerForTest(t, led, &recordingSender{})
 

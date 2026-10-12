@@ -68,9 +68,9 @@ func NewPostgres(db *sql.DB, now func() time.Time) (*Postgres, error) {
 const (
 	// 账号域：app_user 自身以 id 为主键，没有 user_id 列，属于系统级查询。
 	sqlUserCountLiveEmail = `SELECT id FROM app_user WHERE lower(email) = lower($1) AND deleted_at IS NULL`
-	sqlUserInsert         = `INSERT INTO app_user (id, email, display_name, password_hash, created_at, updated_at, deleted_at) VALUES ($1, $2, $3, $4, $5, $6, $7)`
-	sqlUserByEmail        = `SELECT id, email, display_name, password_hash, created_at, updated_at, deleted_at FROM app_user WHERE lower(email) = lower($1) AND deleted_at IS NULL`
-	sqlUserByID           = `SELECT id, email, display_name, password_hash, created_at, updated_at, deleted_at FROM app_user WHERE id = $1 AND deleted_at IS NULL`
+	sqlUserInsert         = `INSERT INTO app_user (id, email, display_name, password_hash, timezone, created_at, updated_at, deleted_at) VALUES ($1, $2, $3, $4, NULLIF($5, ''), $6, $7, $8)`
+	sqlUserByEmail        = `SELECT id, email, display_name, password_hash, COALESCE(timezone, ''), created_at, updated_at, deleted_at FROM app_user WHERE lower(email) = lower($1) AND deleted_at IS NULL`
+	sqlUserByID           = `SELECT id, email, display_name, password_hash, COALESCE(timezone, ''), created_at, updated_at, deleted_at FROM app_user WHERE id = $1 AND deleted_at IS NULL`
 	sqlUserExists         = `SELECT 1 FROM app_user WHERE id = $1`
 	// 不带 deleted_at IS NULL：与内存实现一致地"幂等删号"，重复删不报不存在。
 	sqlUserSoftDelete = `UPDATE app_user SET deleted_at = $2, updated_at = $2 WHERE id = $1`
@@ -190,7 +190,7 @@ func scanUser(s rowScanner) (User, error) {
 		u         User
 		deletedAt sql.NullTime
 	)
-	if err := s.Scan(&u.ID, &u.Email, &u.DisplayName, &u.PasswordHash, &u.CreatedAt, &u.UpdatedAt, &deletedAt); err != nil {
+	if err := s.Scan(&u.ID, &u.Email, &u.DisplayName, &u.PasswordHash, &u.TimeZone, &u.CreatedAt, &u.UpdatedAt, &deletedAt); err != nil {
 		return User{}, err
 	}
 	if deletedAt.Valid {
@@ -300,8 +300,14 @@ func (p *Postgres) CreateUser(ctx context.Context, u User) error {
 	if u.DeletedAt != nil {
 		deletedAt = u.DeletedAt.UTC()
 	}
+	// 写入前先校验时区名：库里存一个读不出来的值，用户会以为自己设了时区、
+	// 实际按 UTC 计算，而且没有任何报错能提示他。
+	tz, err := normalizeTimeZone(u.TimeZone)
+	if err != nil {
+		return err
+	}
 	if _, err := p.db.ExecContext(ctx, sqlUserInsert,
-		u.ID, u.Email, u.DisplayName, u.PasswordHash, createdAt.UTC(), updatedAt.UTC(), deletedAt); err != nil {
+		u.ID, u.Email, u.DisplayName, u.PasswordHash, tz, createdAt.UTC(), updatedAt.UTC(), deletedAt); err != nil {
 		return fmt.Errorf("store: 创建用户失败: %w", err)
 	}
 	return nil
