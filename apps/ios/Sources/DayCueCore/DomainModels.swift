@@ -591,3 +591,470 @@ public struct MemoryRecord: Identifiable, Equatable, Sendable {
         self.deletedAt = deletedAt
     }
 }
+
+// MARK: - 第二阶段及以后：笔记 / 课表 / 追问 / 记忆 / 地点 / 主动消息 / 同步
+//
+// 这些类型与 Schema v2 的表一一对应。放在同一个文件里，是为了让
+// 「表结构」与「内存模型」的差异一眼可见——两者一旦分家，迁移就会写错。
+
+/// 笔记的来源。保留来源是为了让「这条笔记从哪来」永远可追溯。
+public enum NoteOriginKind: String, Codable, CaseIterable, Sendable {
+    case capture
+    case followUp = "follow_up"
+    case manual
+    case memory
+
+    public var displayName: String {
+        switch self {
+        case .capture: return "记录"
+        case .followUp: return "课后回复"
+        case .manual: return "手动创建"
+        case .memory: return "记忆"
+        }
+    }
+}
+
+/// 可持久化的笔记。不再是 proposal.payload_json 里的一个片段。
+public struct NoteRecord: Codable, Equatable, Sendable, Identifiable {
+    public var id: String
+    public var title: String
+    public var body: String
+    public var tags: [String]
+    public var courseHint: String?
+    public var originCaptureId: String?
+    public var originItemId: String?
+    public var originKind: NoteOriginKind
+    /// 用户改过的笔记不允许被重试解析覆盖，与 capture 的 userEdited 同一套规则。
+    public var userEdited: Bool
+    public var occurredAt: String?
+    public var createdAt: String
+    public var updatedAt: String
+    public var deletedAt: String?
+
+    public init(
+        id: String,
+        title: String,
+        body: String,
+        tags: [String] = [],
+        courseHint: String? = nil,
+        originCaptureId: String? = nil,
+        originItemId: String? = nil,
+        originKind: NoteOriginKind = .manual,
+        userEdited: Bool = false,
+        occurredAt: String? = nil,
+        createdAt: String,
+        updatedAt: String,
+        deletedAt: String? = nil
+    ) {
+        self.id = id
+        self.title = title
+        self.body = body
+        self.tags = tags
+        self.courseHint = courseHint
+        self.originCaptureId = originCaptureId
+        self.originItemId = originItemId
+        self.originKind = originKind
+        self.userEdited = userEdited
+        self.occurredAt = occurredAt
+        self.createdAt = createdAt
+        self.updatedAt = updatedAt
+        self.deletedAt = deletedAt
+    }
+}
+
+/// 单双周。week_parity 只描述纸面规则，不代表某次课真的上了。
+public enum WeekParity: String, Codable, CaseIterable, Sendable {
+    case all
+    case odd
+    case even
+
+    public var displayName: String {
+        switch self {
+        case .all: return "每周"
+        case .odd: return "单周"
+        case .even: return "双周"
+        }
+    }
+}
+
+/// 课程。followUpEnabled 是「按课程开关课后追问」的落点。
+public struct CourseRecord: Codable, Equatable, Sendable, Identifiable {
+    public var id: String
+    public var name: String
+    public var teacher: String?
+    public var location: String?
+    public var term: String?
+    public var color: String?
+    public var followUpEnabled: Bool
+    public var followUpDelayMinutes: Int
+    public var createdAt: String
+    public var updatedAt: String
+    public var deletedAt: String?
+
+    public init(
+        id: String,
+        name: String,
+        teacher: String? = nil,
+        location: String? = nil,
+        term: String? = nil,
+        color: String? = nil,
+        followUpEnabled: Bool = false,
+        followUpDelayMinutes: Int = 5,
+        createdAt: String,
+        updatedAt: String,
+        deletedAt: String? = nil
+    ) {
+        self.id = id
+        self.name = name
+        self.teacher = teacher
+        self.location = location
+        self.term = term
+        self.color = color
+        self.followUpEnabled = followUpEnabled
+        self.followUpDelayMinutes = followUpDelayMinutes
+        self.createdAt = createdAt
+        self.updatedAt = updatedAt
+        self.deletedAt = deletedAt
+    }
+}
+
+/// 每周重复规则：星期几 + 节次 + 单双周 + 生效周范围。
+public struct CourseScheduleRule: Codable, Equatable, Sendable, Identifiable {
+    public var id: String
+    public var courseId: String
+    public var weekday: Int
+    public var sectionStart: Int
+    public var sectionEnd: Int
+    public var startTimeLocal: String
+    public var endTimeLocal: String
+    public var weekParity: WeekParity
+    public var weekStart: Int
+    public var weekEnd: Int
+    public var effectiveFrom: String?
+    public var effectiveTo: String?
+    public var createdAt: String
+    public var updatedAt: String
+
+    public init(
+        id: String,
+        courseId: String,
+        weekday: Int,
+        sectionStart: Int,
+        sectionEnd: Int,
+        startTimeLocal: String,
+        endTimeLocal: String,
+        weekParity: WeekParity = .all,
+        weekStart: Int = 1,
+        weekEnd: Int = 30,
+        effectiveFrom: String? = nil,
+        effectiveTo: String? = nil,
+        createdAt: String,
+        updatedAt: String
+    ) {
+        self.id = id
+        self.courseId = courseId
+        self.weekday = weekday
+        self.sectionStart = sectionStart
+        self.sectionEnd = sectionEnd
+        self.startTimeLocal = startTimeLocal
+        self.endTimeLocal = endTimeLocal
+        self.weekParity = weekParity
+        self.weekStart = weekStart
+        self.weekEnd = weekEnd
+        self.effectiveFrom = effectiveFrom
+        self.effectiveTo = effectiveTo
+        self.createdAt = createdAt
+        self.updatedAt = updatedAt
+    }
+}
+
+public enum CourseInstanceStatus: String, Codable, CaseIterable, Sendable {
+    case scheduled
+    case cancelled
+    case rescheduled
+
+    public var displayName: String {
+        switch self {
+        case .scheduled: return "正常"
+        case .cancelled: return "停课"
+        case .rescheduled: return "调课"
+        }
+    }
+}
+
+public enum CourseInstanceOrigin: String, Codable, CaseIterable, Sendable {
+    case rule
+    case manual
+    case ics
+    case ocr
+
+    public var displayName: String {
+        switch self {
+        case .rule: return "由课表生成"
+        case .manual: return "手动添加"
+        case .ics: return "ICS 导入"
+        case .ocr: return "图片识别"
+        }
+    }
+}
+
+/// 一次具体的课。endsAtUTC 是**预计**结束时间，只用来排通知。
+/// 它不是「实际下课」，更不是出勤记录——这条限制写在类型注释里，防止后面被误用。
+public struct CourseInstanceRecord: Codable, Equatable, Sendable, Identifiable {
+    public var id: String
+    public var courseId: String
+    public var ruleId: String?
+    public var startsAtUTC: String
+    public var endsAtUTC: String
+    public var timezone: String
+    public var status: CourseInstanceStatus
+    public var location: String?
+    public var note: String?
+    public var origin: CourseInstanceOrigin
+    public var createdAt: String
+    public var updatedAt: String
+
+    public init(
+        id: String,
+        courseId: String,
+        ruleId: String? = nil,
+        startsAtUTC: String,
+        endsAtUTC: String,
+        timezone: String,
+        status: CourseInstanceStatus = .scheduled,
+        location: String? = nil,
+        note: String? = nil,
+        origin: CourseInstanceOrigin = .rule,
+        createdAt: String,
+        updatedAt: String
+    ) {
+        self.id = id
+        self.courseId = courseId
+        self.ruleId = ruleId
+        self.startsAtUTC = startsAtUTC
+        self.endsAtUTC = endsAtUTC
+        self.timezone = timezone
+        self.status = status
+        self.location = location
+        self.note = note
+        self.origin = origin
+        self.createdAt = createdAt
+        self.updatedAt = updatedAt
+    }
+}
+
+public enum FollowUpState: String, Codable, CaseIterable, Sendable {
+    case scheduled
+    case delivered
+    case snoozed
+    case skipped
+    case answered
+    case expired
+    case cancelled
+
+    public var displayName: String {
+        switch self {
+        case .scheduled: return "已安排"
+        case .delivered: return "已发出"
+        case .snoozed: return "稍后提醒"
+        case .skipped: return "已跳过"
+        case .answered: return "已回复"
+        case .expired: return "已过期"
+        case .cancelled: return "已取消"
+        }
+    }
+
+    /// 终态不允许再被调度器拾取，否则会出现「跳过之后又被追问」。
+    public var isTerminal: Bool {
+        switch self {
+        case .answered, .skipped, .expired, .cancelled: return true
+        case .scheduled, .delivered, .snoozed: return false
+        }
+    }
+}
+
+public struct FollowUpRecord: Codable, Equatable, Sendable, Identifiable {
+    public var id: String
+    public var courseInstanceId: String
+    public var courseId: String
+    public var state: FollowUpState
+    public var scheduledAtUTC: String
+    public var deliveredAtUTC: String?
+    public var snoozeUntilUTC: String?
+    public var attempt: Int
+    public var createdAt: String
+    public var updatedAt: String
+
+    public init(
+        id: String,
+        courseInstanceId: String,
+        courseId: String,
+        state: FollowUpState = .scheduled,
+        scheduledAtUTC: String,
+        deliveredAtUTC: String? = nil,
+        snoozeUntilUTC: String? = nil,
+        attempt: Int = 0,
+        createdAt: String,
+        updatedAt: String
+    ) {
+        self.id = id
+        self.courseInstanceId = courseInstanceId
+        self.courseId = courseId
+        self.state = state
+        self.scheduledAtUTC = scheduledAtUTC
+        self.deliveredAtUTC = deliveredAtUTC
+        self.snoozeUntilUTC = snoozeUntilUTC
+        self.attempt = attempt
+        self.createdAt = createdAt
+        self.updatedAt = updatedAt
+    }
+}
+
+public enum FollowUpReplyKind: String, Codable, CaseIterable, Sendable {
+    case text
+    case audio
+}
+
+/// 课后回复。归档后必须能顺着 noteId / taskId 找回关联。
+public struct FollowUpReplyRecord: Codable, Equatable, Sendable, Identifiable {
+    public var id: String
+    public var followUpId: String
+    public var courseId: String
+    public var kind: FollowUpReplyKind
+    public var text: String?
+    public var transcript: String?
+    public var mediaPath: String?
+    public var noteId: String?
+    public var taskId: String?
+    public var createdAt: String
+
+    public init(
+        id: String,
+        followUpId: String,
+        courseId: String,
+        kind: FollowUpReplyKind,
+        text: String? = nil,
+        transcript: String? = nil,
+        mediaPath: String? = nil,
+        noteId: String? = nil,
+        taskId: String? = nil,
+        createdAt: String
+    ) {
+        self.id = id
+        self.followUpId = followUpId
+        self.courseId = courseId
+        self.kind = kind
+        self.text = text
+        self.transcript = transcript
+        self.mediaPath = mediaPath
+        self.noteId = noteId
+        self.taskId = taskId
+        self.createdAt = createdAt
+    }
+}
+
+/// 记忆状态。candidate 是推断出来的候选，confirmed 才算用户认可的事实。
+public enum MemoryStatus: String, Codable, CaseIterable, Sendable {
+    case candidate
+    case confirmed
+    case retired
+    case conflict
+
+    public var displayName: String {
+        switch self {
+        case .candidate: return "候选"
+        case .confirmed: return "已确认"
+        case .retired: return "已失效"
+        case .conflict: return "有冲突"
+        }
+    }
+
+    /// 检索时只允许取出可用的记忆：候选与冲突都不能当作事实使用。
+    public var isUsableAsFact: Bool { self == .confirmed }
+}
+
+/// 来源类型。inferred 永远不能冒充 user_setting / user_statement。
+public enum MemorySourceKind: String, Codable, CaseIterable, Sendable {
+    case userSetting = "user_setting"
+    case userStatement = "user_statement"
+    case inferred
+
+    public var displayName: String {
+        switch self {
+        case .userSetting: return "用户设置"
+        case .userStatement: return "用户说过"
+        case .inferred: return "推断"
+        }
+    }
+
+    /// 能不能作为「用户事实」直接用于回答。
+    public var isUserAsserted: Bool { self != .inferred }
+}
+
+/// 记忆类别。控制「停止记录某类别」的粒度。
+public enum MemoryCategory: String, Codable, CaseIterable, Sendable {
+    case preference
+    case goal
+    case phase
+    case experience
+    case person
+    case place
+
+    public var displayName: String {
+        switch self {
+        case .preference: return "偏好"
+        case .goal: return "目标"
+        case .phase: return "阶段状态"
+        case .experience: return "经历"
+        case .person: return "人物"
+        case .place: return "地点"
+        }
+    }
+}
+
+/// 记忆主记录。statement 是当前生效的说法，历史在 memory_revision 里。
+public struct MemoryItem: Codable, Equatable, Sendable, Identifiable {
+    public var id: String
+    public var category: MemoryCategory
+    public var statement: String
+    public var status: MemoryStatus
+    public var sourceKind: MemorySourceKind
+    public var confidence: Double?
+    public var sourceRef: String?
+    public var revision: Int
+    public var effectiveFrom: String?
+    public var effectiveTo: String?
+    public var createdAt: String
+    public var updatedAt: String
+    public var deletedAt: String?
+
+    public init(
+        id: String,
+        category: MemoryCategory,
+        statement: String,
+        status: MemoryStatus = .candidate,
+        sourceKind: MemorySourceKind = .inferred,
+        confidence: Double? = nil,
+        sourceRef: String? = nil,
+        revision: Int = 1,
+        effectiveFrom: String? = nil,
+        effectiveTo: String? = nil,
+        createdAt: String,
+        updatedAt: String,
+        deletedAt: String? = nil
+    ) {
+        self.id = id
+        self.category = category
+        self.statement = statement
+        self.status = status
+        self.sourceKind = sourceKind
+        self.confidence = confidence
+        self.sourceRef = sourceRef
+        self.revision = revision
+        self.effectiveFrom = effectiveFrom
+        self.effectiveTo = effectiveTo
+        self.createdAt = createdAt
+        self.updatedAt = updatedAt
+        self.deletedAt = deletedAt
+    }
+}

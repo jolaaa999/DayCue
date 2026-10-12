@@ -81,8 +81,34 @@ public final class DayCueStore {
                 try? fileManager.removeItem(at: url)
             }
         }
+        // 顺序不能随意调整：先删子表再删父表，否则外键约束会让删除失败。
+        // 这里必须覆盖**全部**数据表 —— 漏一张就会出现「点了清空数据，重启后
+        // 那类内容还在」的隐私问题（note 表此前就是这样被漏掉的）。
         try database.transaction {
             for table in [
+                // 课后追问：reply → follow_up → course_instance
+                "follow_up_reply",
+                "follow_up",
+                "course_instance",
+                "course_schedule_rule",
+                "course",
+                // 长期记忆：派生索引与历史先删，再删记忆本身
+                "memory_revision",
+                "memory_index",
+                "memory_control",
+                // 地点与主动规则：规则先于地点
+                "geo_rule",
+                "place",
+                "proactive_message",
+                // 同步状态：墓碑与快照都是本地缓存，可安全清空
+                "sync_tombstone",
+                "sync_snapshot",
+                "sync_cursor",
+                "device",
+                "account",
+                // 笔记与原始记录
+                "note",
+                // v1 既有表
                 "outbox_operation",
                 "external_binding",
                 "extraction_proposal",
