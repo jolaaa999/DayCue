@@ -173,6 +173,47 @@ func TestDeleteByOwnerRemovesFilesFromDisk(t *testing.T) {
 	rc.Close()
 }
 
+func TestDeleteByUserRemovesEveryFileFromDisk(t *testing.T) {
+	s := newStore(t)
+	ctx := context.Background()
+
+	// 同一个用户、不同属主类型与不同记录，全部都要被清掉。
+	a, _ := s.Put(ctx, "u1", "capture", "c1", "image/png", strings.NewReader("照片"))
+	b, _ := s.Put(ctx, "u1", "note", "n1", "audio/m4a", strings.NewReader("录音"))
+	c, _ := s.Put(ctx, "u1", "follow_up", "f1", "image/jpeg", strings.NewReader("截图"))
+	other, _ := s.Put(ctx, "u2", "capture", "c1", "image/png", strings.NewReader("别人的"))
+
+	paths := map[string]string{a.ID: a.StorageKey, b.ID: b.StorageKey, c.ID: c.StorageKey}
+
+	if err := s.DeleteByUser(ctx, "u1"); err != nil {
+		t.Fatalf("按用户删除失败: %v", err)
+	}
+
+	// 账号注销后磁盘上不能留下任何该用户的字节 —— 这是隐私要求，不是优化。
+	for id, key := range paths {
+		if _, _, err := s.Open(ctx, "u1", id); !errors.Is(err, ErrNotFound) {
+			t.Errorf("对象 %s 元数据应已删除，实际 %v", id, err)
+		}
+		if _, err := os.Stat(filepath.Join(s.root, key)); err == nil {
+			t.Errorf("对象 %s 的文件仍在磁盘上: %s", id, key)
+		}
+	}
+
+	// 另一个用户必须毫发无伤。
+	rc, _, err := s.Open(ctx, "u2", other.ID)
+	if err != nil {
+		t.Fatalf("其它用户的对象不应被牵连，实际 %v", err)
+	}
+	rc.Close()
+}
+
+func TestDeleteByUserRejectsEmptyUser(t *testing.T) {
+	s := newStore(t)
+	if err := s.DeleteByUser(context.Background(), "  "); !errors.Is(err, ErrEmptyUser) {
+		t.Fatalf("空 userID 应被拒绝，实际 %v", err)
+	}
+}
+
 func TestListScopedToOwnerAndUser(t *testing.T) {
 	s := newStore(t)
 	ctx := context.Background()

@@ -75,3 +75,18 @@ func (c *MemoryCatalog) DeleteByOwner(ctx context.Context, userID, ownerType, ow
 	sort.Slice(removed, func(i, j int) bool { return removed[i].ID < removed[j].ID })
 	return removed, nil
 }
+
+// DeleteAllForUser 删除该用户的全部对象并返回被删清单，供账号注销时一并清盘。
+func (c *MemoryCatalog) DeleteAllForUser(ctx context.Context, userID string) ([]Object, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	var removed []Object
+	for k, o := range c.objs {
+		if o.UserID == userID {
+			removed = append(removed, o)
+			delete(c.objs, k)
+		}
+	}
+	sort.Slice(removed, func(i, j int) bool { return removed[i].ID < removed[j].ID })
+	return removed, nil
+}

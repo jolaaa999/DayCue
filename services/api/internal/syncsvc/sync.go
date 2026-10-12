@@ -124,9 +124,12 @@ func (s *Service) pushOne(ctx context.Context, userID string, it PushItem, now t
 		res.Version = saved.Version
 	case errors.Is(err, store.ErrConflict):
 		res.Outcome = OutcomeConflict
-		// 冲突时必须把服务端现状带回去，否则客户端无法让用户比较。
-		if cur, gerr := s.currentVersion(ctx, userID, it.Type, it.ID); gerr == nil {
-			res.ServerVersion = cur
+		// 冲突时必须把服务端现状**连同内容**带回去，否则客户端只能拿到一个版本号，
+		// 没法让用户"本地这版 vs 服务端那版"逐字段比较 —— 那就等于把数据卡在中间。
+		if cur, gerr := s.currentRecord(ctx, userID, it.Type, it.ID); gerr == nil {
+			res.ServerVersion = cur.Version
+			res.ServerPayload = cur.Payload
+			res.ServerDeleted = cur.Deleted()
 		}
 		res.Reason = "该条目在服务端已被修改，请逐项确认保留哪一版"
 	case errors.Is(err, store.ErrNotFound):
@@ -139,19 +142,27 @@ func (s *Service) pushOne(ctx context.Context, userID string, it PushItem, now t
 	return res
 }
 
-// currentVersion 读取服务端某条记录的当前版本与内容，用于冲突展示。
-func (s *Service) currentVersion(ctx context.Context, userID string, t store.EntityType, id string) (int64, error) {
-	changes, _, err := s.Sync.Pull(ctx, userID, "", 0)
+// currentRecord 读取服务端某条记录的当前状态，用于冲突展示。
+//
+// 实现说明：这里用"拉一次快照再线性查找"，而不是给 SyncStore 加一个按 ID 查的方法。
+// 后者更干净，但会改动已冻结的存储接口；冲突路径不是热路径，快照扫描足够。
+// 上限取得很大是为了尽量避免"记录不在前若干条里"导致查不到；
+// 真查不到时只回传版本号、不回传内容，客户端会要求用户重新拉取，不会静默丢数据。
+func (s *Service) currentRecord(ctx context.Context, userID string, t store.EntityType, id string) (store.Record, error) {
+	changes, _, err := s.Sync.Pull(ctx, userID, "", maxSnapshotScan)
 	if err != nil {
-		return 0, err
+		return store.Record{}, err
 	}
 	for _, c := range changes {
 		if c.Record.Type == t && c.Record.ID == id {
-			return c.Record.Version, nil
+			return c.Record, nil
 		}
 	}
-	return 0, store.ErrNotFound
+	return store.Record{}, store.ErrNotFound
 }
+
+// maxSnapshotScan 是冲突展示时扫描快照的上限。
+const maxSnapshotScan = 100000
 
 // Conflict 是需要用户处理的冲突项。
 type Conflict struct {

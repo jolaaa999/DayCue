@@ -31,9 +31,22 @@ func main() {
 	}
 
 	srv := api.New(cfg)
+
+	// 云同步是可选能力：未配置数据库时这里返回 nil，服务只提供 AI 端点。
+	// 配置了却无法初始化（缺驱动等）则拒绝启动，避免"以为在同步其实没有"。
+	cloudHandler, cloudNote, err := newCloudSyncHandler(cfg, srv)
+	if err != nil {
+		slog.Error("云同步初始化失败，拒绝启动", "error", err.Error())
+		os.Exit(1)
+	}
+	rootHandler := http.Handler(srv.Handler())
+	if cloudHandler != nil {
+		rootHandler = cloudHandler
+	}
+
 	httpSrv := &http.Server{
 		Addr:              cfg.Addr,
-		Handler:           srv.Handler(),
+		Handler:           rootHandler,
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       30 * time.Second,
 		WriteTimeout:      90 * time.Second,
@@ -48,6 +61,9 @@ func main() {
 		"asr", providerState(srv.ASR != nil),
 		"auth_required", cfg.AuthToken != "",
 	)
+	if cloudNote != "" {
+		slog.Info(cloudNote)
+	}
 	if cfg.FixtureMode {
 		slog.Warn("模拟模式已开启：所有整理结果都是预设样例，不构成真实 AI 调用，界面上会标记为「模拟结果」")
 	}

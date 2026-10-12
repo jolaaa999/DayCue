@@ -65,7 +65,19 @@ type Store interface {
 	Open(ctx context.Context, userID, id string) (io.ReadCloser, Object, error)
 	Delete(ctx context.Context, userID, id string) error
 	DeleteByOwner(ctx context.Context, userID, ownerType, ownerID string) error
+	// DeleteByUser 清掉该用户的**全部**媒体。
+	// 账号注销必须走这里：否则库里记录没了、磁盘上照片和录音还在，属于隐私泄漏。
+	DeleteByUser(ctx context.Context, userID string) error
 	List(ctx context.Context, userID, ownerType, ownerID string) ([]Object, error)
+}
+
+// UserWideCatalog 是 Catalog 的**可选**扩展能力。
+//
+// 之所以做成可选接口而不是直接加进 Catalog：Catalog 已有别的实现
+// （PostgreSQL 版），强行加方法会让它编译不过。这里用类型断言探测能力，
+// 不支持时返回明确错误，而不是假装删干净了。
+type UserWideCatalog interface {
+	DeleteAllForUser(ctx context.Context, userID string) ([]Object, error)
 }
 
 // FS 是落在本地文件系统上的实现。
@@ -279,6 +291,33 @@ func (f *FS) DeleteByOwner(ctx context.Context, userID, ownerType, ownerID strin
 	objs, err := f.catalog.DeleteByOwner(ctx, userID, ownerType, ownerID)
 	if err != nil {
 		return fmt.Errorf("media: 按属主删除失败: %w", err)
+	}
+	for _, obj := range objs {
+		path := filepath.Join(f.root, obj.StorageKey)
+		if withinRoot(f.root, path) {
+			if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+				return fmt.Errorf("media: 删文件失败: %w", err)
+			}
+		}
+	}
+	return nil
+}
+
+// DeleteByUser 删除该用户的全部媒体。
+//
+// 若底层 Catalog 不支持按用户枚举，返回明确错误而不是静默成功 ——
+// "账号删了但文件还在"是安全问题，不能靠返回值含糊过去。
+func (f *FS) DeleteByUser(ctx context.Context, userID string) error {
+	if strings.TrimSpace(userID) == "" {
+		return ErrEmptyUser
+	}
+	wide, ok := f.catalog.(UserWideCatalog)
+	if !ok {
+		return fmt.Errorf("%w: 当前元数据存储不支持按用户清理", ErrUnsupportedType)
+	}
+	objs, err := wide.DeleteAllForUser(ctx, userID)
+	if err != nil {
+		return fmt.Errorf("media: 按用户删除失败: %w", err)
 	}
 	for _, obj := range objs {
 		path := filepath.Join(f.root, obj.StorageKey)

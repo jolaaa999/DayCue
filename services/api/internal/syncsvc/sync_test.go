@@ -125,6 +125,63 @@ func TestConflictCarriesServerVersionForUserDecision(t *testing.T) {
 	}
 }
 
+func TestConflictCarriesServerPayloadForFieldByFieldComparison(t *testing.T) {
+	svc, mem := newSvc(t)
+	ctx := context.Background()
+
+	first, _ := svc.Push(ctx, "u1", []PushItem{
+		{Type: store.EntityTask, ID: "t1", Payload: []byte("服务端这一版"), UpdatedAt: base},
+	})
+
+	// 客户端基于过期版本推送，冲突响应里必须带服务端**内容**，
+	// 否则界面只能显示一个版本号，用户没法比较该保留哪一版。
+	results, err := svc.Push(ctx, "u1", []PushItem{
+		{Type: store.EntityTask, ID: "t1", BaseVersion: first[0].Version + 7, Payload: []byte("本地这一版"), UpdatedAt: base},
+	})
+	if err != nil {
+		t.Fatalf("推送失败: %v", err)
+	}
+	if results[0].Outcome != OutcomeConflict {
+		t.Fatalf("应冲突，实际 %+v", results[0])
+	}
+	if string(results[0].ServerPayload) != "服务端这一版" {
+		t.Fatalf("冲突必须回传服务端内容，实际 %q", results[0].ServerPayload)
+	}
+	if results[0].ServerDeleted {
+		t.Fatal("服务端记录未删除，ServerDeleted 应为 false")
+	}
+	_ = mem
+}
+
+func TestConflictOnDeletedRecordReportsServerDeleted(t *testing.T) {
+	svc, _ := newSvc(t)
+	ctx := context.Background()
+
+	first, _ := svc.Push(ctx, "u1", []PushItem{
+		{Type: store.EntityTask, ID: "t1", Payload: []byte("内容"), UpdatedAt: base},
+	})
+	if _, err := svc.Push(ctx, "u1", []PushItem{
+		{Type: store.EntityTask, ID: "t1", BaseVersion: first[0].Version, Deleted: true, UpdatedAt: base.Add(time.Minute)},
+	}); err != nil {
+		t.Fatalf("删除失败: %v", err)
+	}
+
+	// 服务端已删除时，冲突响应要让客户端知道"那边已经没了"，
+	// 而不是给一份空内容让它以为服务端是空的。
+	results, err := svc.Push(ctx, "u1", []PushItem{
+		{Type: store.EntityTask, ID: "t1", BaseVersion: first[0].Version, Payload: []byte("陈旧修改"), UpdatedAt: base},
+	})
+	if err != nil {
+		t.Fatalf("推送失败: %v", err)
+	}
+	if results[0].Outcome != OutcomeConflict {
+		t.Fatalf("应冲突，实际 %+v", results[0])
+	}
+	if !results[0].ServerDeleted {
+		t.Fatal("服务端已删除时 ServerDeleted 必须为 true")
+	}
+}
+
 func TestCollectConflictsSeparatesThemFromSuccesses(t *testing.T) {
 	svc, _ := newSvc(t)
 	ctx := context.Background()

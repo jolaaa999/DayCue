@@ -25,6 +25,14 @@ type Config struct {
 	RequestTimeout time.Duration
 	ShutdownGrace  time.Duration
 
+	// ---- 云同步（可选）----
+	// 三项全空表示云同步未启用：服务端只提供 AI 端点，客户端完全走本地。
+	// 这样"不登录也能用"不是靠客户端判断，而是服务端确实没有这套能力。
+	DatabaseURL string
+	// TokenSecret 是用户访问令牌的签名密钥，与 AuthToken 语义不同，不要复用。
+	TokenSecret string
+	MediaRoot   string
+
 	LLM ProviderConfig
 	ASR ProviderConfig
 }
@@ -53,6 +61,9 @@ func Load() Config {
 		MaxAudioBytes:  envInt64("DAYCUE_MAX_AUDIO_BYTES", 12*1024*1024),
 		RequestTimeout: envDuration("DAYCUE_REQUEST_TIMEOUT", 30*time.Second),
 		ShutdownGrace:  envDuration("DAYCUE_SHUTDOWN_GRACE", 5*time.Second),
+		DatabaseURL:    os.Getenv("DAYCUE_DATABASE_URL"),
+		TokenSecret:    os.Getenv("DAYCUE_TOKEN_SECRET"),
+		MediaRoot:      env("DAYCUE_MEDIA_ROOT", "data/media"),
 	}
 	c.LLM = ProviderConfig{
 		BaseURL: os.Getenv("DAYCUE_LLM_BASE_URL"),
@@ -83,6 +94,12 @@ func (c Config) Validate() error {
 	}
 	if c.MaxJSONBytes <= 0 || c.MaxAudioBytes <= 0 {
 		problems = append(problems, "请求体大小上限必须为正数")
+	}
+	// 启用云同步却用弱密钥，等于把所有人账号的令牌都变成可伪造的。
+	// 宁可拒绝启动，也不要带着弱密钥上线。
+	if strings.TrimSpace(c.DatabaseURL) != "" && len(c.TokenSecret) < 32 {
+		problems = append(problems,
+			"启用云同步（DAYCUE_DATABASE_URL）时，DAYCUE_TOKEN_SECRET 必须至少 32 字节")
 	}
 	if len(problems) > 0 {
 		return errors.New(strings.Join(problems, "; "))
