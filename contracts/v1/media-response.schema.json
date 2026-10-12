@@ -1,0 +1,45 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://daycue.local/contracts/v1/media-response.schema.json",
+  "title": "MediaObjectResponse",
+  "description": "POST /v1/media 成功时返回 201。刻意不下发 storage_key：那是服务端落盘路径，客户端既不需要也不该知道。GET /v1/media/{id} 的响应体是原始字节而不是本 JSON。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "id",
+    "owner_type",
+    "owner_id",
+    "content_type",
+    "byte_size",
+    "sha256",
+    "created_at"
+  ],
+  "properties": {
+    "id": {
+      "type": "string"
+    },
+    "owner_type": {
+      "type": "string",
+      "maxLength": 64
+    },
+    "owner_id": {
+      "type": "string",
+      "maxLength": 128
+    },
+    "content_type": {
+      "type": "string"
+    },
+    "byte_size": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "sha256": {
+      "type": "string",
+      "description": "内容哈希的十六进制串；下载响应里也会放在 X-DayCue-SHA256 头。"
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time"
+    }
+  }
+}

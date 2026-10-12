@@ -1,0 +1,64 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://daycue.local/contracts/v1/device-list-response.schema.json",
+  "title": "DeviceListResponse",
+  "description": "GET /v1/devices 响应。只包含当前令牌对应的账号的设备。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "devices"
+  ],
+  "properties": {
+    "devices": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "description": "设备对外表示。刻意不下发 push_token：客户端本就持有它，回传只会增加它出现在日志与代理链路里的机会。",
+        "required": [
+          "id",
+          "platform",
+          "name",
+          "capabilities",
+          "created_at",
+          "updated_at"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "platform": {
+            "enum": [
+              "ios",
+              "android",
+              "macos",
+              "unknown"
+            ]
+          },
+          "name": {
+            "type": "string"
+          },
+          "capabilities": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "boolean"
+            }
+          },
+          "last_seen_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "省略表示从未上报过在线时间。"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      }
+    }
+  }
+}

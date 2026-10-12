@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://daycue.local/contracts/v1/media-upload-request.schema.json",
+  "title": "MediaUploadRequest",
+  "description": "POST /v1/media 请求。Content-Type 必须是 multipart/form-data，下面用 JSON Schema 的惯用写法列出表单字段，实际传输不是 JSON。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "owner_type",
+    "owner_id",
+    "file"
+  ],
+  "properties": {
+    "owner_type": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64,
+      "description": "媒体挂在哪种实体上，例如 task、note、capture。归属由令牌决定，owner 只描述挂在哪条记录上。"
+    },
+    "owner_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128
+    },
+    "file": {
+      "type": "string",
+      "format": "binary",
+      "description": "文件内容。Content-Type 缺失时服务端按前 512 字节嗅探；不在白名单 image/、audio/、video/、text/plain、application/pdf 时返回 415。单文件默认上限 25 MiB，超出返回 413。"
+    }
+  }
+}

@@ -8,6 +8,22 @@
 | `v1/extraction-response.schema.json` | `POST /v1/extractions` 响应体（结构化候选） |
 | `v1/transcription-response.schema.json` | `POST /v1/transcriptions` 响应体 |
 | `v1/error.schema.json` | 所有非 2xx 响应的统一错误体 |
+| `v1/register-request.schema.json` | `POST /v1/auth/register` 请求体 |
+| `v1/register-response.schema.json` | `POST /v1/auth/register` 响应体（201，含可选设备） |
+| `v1/login-request.schema.json` | `POST /v1/auth/login` 请求体 |
+| `v1/login-response.schema.json` | `POST /v1/auth/login` 响应体（200） |
+| `v1/device-request.schema.json` | `POST /v1/devices` 请求体 |
+| `v1/device-response.schema.json` | 单台设备响应体（`POST /v1/devices` 与导出复用） |
+| `v1/device-list-response.schema.json` | `GET /v1/devices` 响应体 |
+| `v1/sync-push-request.schema.json` | `POST /v1/sync/push` 请求体（逐条结算） |
+| `v1/sync-push-response.schema.json` | `POST /v1/sync/push` 响应体（冲突时含服务端内容） |
+| `v1/sync-pull-response.schema.json` | `GET /v1/sync/pull` 响应体 |
+| `v1/media-upload-request.schema.json` | `POST /v1/media` 的 multipart 表单字段 |
+| `v1/media-response.schema.json` | `POST /v1/media` 响应体（不下发 storage_key） |
+| `v1/export-response.schema.json` | `GET /v1/export` 响应体（含墓碑） |
+| `v1/account-delete-response.schema.json` | `DELETE /v1/account` 的 204 语义登记（无响应体） |
+| `v1/proactive-candidate.schema.json` | 主动消息候选（预留，暂无 HTTP 端点） |
+| `v1/proactive-delivery.schema.json` | 主动消息投递状态与回执（预留，暂无 HTTP 端点） |
 | `fixtures/extract-os-pv.request.json` | 设计文档 5.1 的语音样例请求 |
 | `fixtures/extract-os-pv.response.json` | 同一输入期望的候选结果（1 笔记 + 2 任务） |
 | `fixtures/error.model_output_invalid.json` | 模型返回非法 JSON 时的错误样例 |

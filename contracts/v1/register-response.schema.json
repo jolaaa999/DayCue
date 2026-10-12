@@ -1,0 +1,82 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://daycue.local/contracts/v1/register-response.schema.json",
+  "title": "RegisterResponse",
+  "description": "POST /v1/auth/register 成功时返回 201 Created。校验失败返回 400 或 422，邮箱已存在返回 422，统一使用 error.schema.json。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "user_id",
+    "email",
+    "token",
+    "expires_at"
+  ],
+  "properties": {
+    "user_id": {
+      "type": "string"
+    },
+    "email": {
+      "type": "string"
+    },
+    "display_name": {
+      "type": "string",
+      "description": "省略表示空显示名。"
+    },
+    "token": {
+      "type": "string",
+      "description": "自包含访问令牌；后续请求放在 Authorization: Bearer 头里。"
+    },
+    "expires_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "device": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "设备对外表示。刻意不下发 push_token：客户端本就持有它，回传只会增加它出现在日志与代理链路里的机会。",
+      "required": [
+        "id",
+        "platform",
+        "name",
+        "capabilities",
+        "created_at",
+        "updated_at"
+      ],
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "platform": {
+          "enum": [
+            "ios",
+            "android",
+            "macos",
+            "unknown"
+          ]
+        },
+        "name": {
+          "type": "string"
+        },
+        "capabilities": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "boolean"
+          }
+        },
+        "last_seen_at": {
+          "type": "string",
+          "format": "date-time",
+          "description": "省略表示从未上报过在线时间。"
+        },
+        "created_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updated_at": {
+          "type": "string",
+          "format": "date-time"
+        }
+      }
+    }
+  }
+}

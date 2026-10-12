@@ -1,0 +1,73 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://daycue.local/contracts/v1/sync-push-response.schema.json",
+  "title": "SyncPushResponse",
+  "description": "POST /v1/sync/push 响应。results 与请求 items 一一对应且同序；冲突不会回滚其余条目。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "results"
+  ],
+  "properties": {
+    "results": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "type",
+          "id",
+          "outcome"
+        ],
+        "properties": {
+          "type": {
+            "enum": [
+              "task",
+              "note",
+              "capture",
+              "course",
+              "course_instance",
+              "follow_up",
+              "memory",
+              "place",
+              "geo_rule",
+              "proactive_message"
+            ]
+          },
+          "id": {
+            "type": "string"
+          },
+          "outcome": {
+            "enum": [
+              "accepted",
+              "conflict",
+              "rejected"
+            ],
+            "description": "accepted=已落库；conflict=版本冲突，服务端不改动任何数据，需用户处理；rejected=请求本身不合法，与数据无关。"
+          },
+          "version": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "outcome=accepted 时的新版本号。"
+          },
+          "server_version": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "outcome=conflict 时服务端当前版本。"
+          },
+          "server_deleted": {
+            "type": "boolean",
+            "description": "outcome=conflict 且服务端该记录已是墓碑时出现。"
+          },
+          "server_payload": {
+            "description": "outcome=conflict 时带上的服务端当前内容，供用户逐字段对比；非冲突时字段缺失。"
+          },
+          "reason": {
+            "type": "string",
+            "description": "面向用户的中文原因；outcome=rejected 时必填。"
+          }
+        }
+      }
+    }
+  }
+}

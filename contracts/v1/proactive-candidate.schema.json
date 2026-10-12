@@ -1,0 +1,79 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://daycue.local/contracts/v1/proactive-candidate.schema.json",
+  "title": "ProactiveMessageCandidate",
+  "description": "一条待判定的主动消息候选，对应 internal/proactive 的 Candidate 与 Item。当前服务端还没有暴露 HTTP 端点，本契约先把内部类型的字段名固定下来，避免将来上线时两边对不上。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "dedupe_key",
+    "scheduled_at"
+  ],
+  "properties": {
+    "dedupe_key": {
+      "type": "string",
+      "description": "业务去重键，同一天同一键只发一次。为空表示不参与去重。"
+    },
+    "kind": {
+      "type": "string",
+      "description": "消息种类；冷却判定按种类做，对应 proactive.Item.Kind。"
+    },
+    "scheduled_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "业务希望发出的时刻，UTC。"
+    },
+    "expires_at": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "format": "date-time",
+      "description": "过期时刻；null 表示不过期。过期或推迟后越过过期时刻都不再发送。"
+    },
+    "message": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "下发给客户端的通知内容，对应 push.Message。",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "kind": {
+          "type": "string"
+        },
+        "dedupe_key": {
+          "type": "string",
+          "description": "幂等键；APNs 映射到 apns-collapse-id，FCM 映射到 android.collapse_key。"
+        },
+        "title": {
+          "type": "string"
+        },
+        "body": {
+          "type": "string"
+        },
+        "deep_link": {
+          "type": "string"
+        },
+        "scheduled_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "expires_at": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "date-time"
+        },
+        "data": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "附加字段；值必须是字符串，因为 APNs 自定义字段与 FCM data 只接受字符串。"
+        }
+      }
+    }
+  }
+}

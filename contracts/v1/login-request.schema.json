@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://daycue.local/contracts/v1/login-request.schema.json",
+  "title": "LoginRequest",
+  "description": "POST /v1/auth/login 请求体。账号不存在与口令错误返回同一个 401，接口不得成为账号枚举器。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "email",
+    "password"
+  ],
+  "properties": {
+    "email": {
+      "type": "string",
+      "maxLength": 320
+    },
+    "password": {
+      "type": "string",
+      "maxLength": 1024
+    }
+  }
+}

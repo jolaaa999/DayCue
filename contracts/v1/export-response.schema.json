@@ -1,0 +1,206 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://daycue.local/contracts/v1/export-response.schema.json",
+  "title": "ExportResponse",
+  "description": "GET /v1/export 响应。响应头带 Content-Disposition: attachment。导出包含墓碑：用户需要知道这里曾经有过东西。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "user_id",
+    "exported_at",
+    "records",
+    "memories",
+    "devices"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "1.0"
+    },
+    "user_id": {
+      "type": "string"
+    },
+    "exported_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "records": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "type",
+          "id",
+          "version",
+          "updated_at",
+          "deleted",
+          "tombstone",
+          "payload"
+        ],
+        "properties": {
+          "type": {
+            "enum": [
+              "task",
+              "note",
+              "capture",
+              "course",
+              "course_instance",
+              "follow_up",
+              "memory",
+              "place",
+              "geo_rule",
+              "proactive_message"
+            ]
+          },
+          "id": {
+            "type": "string"
+          },
+          "version": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "deleted": {
+            "type": "boolean"
+          },
+          "tombstone": {
+            "type": "boolean"
+          },
+          "payload": {
+            "description": "实体内容；墓碑时为 null。"
+          }
+        }
+      }
+    },
+    "memories": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "category",
+          "statement",
+          "status",
+          "source_kind",
+          "confidence",
+          "source_ref",
+          "revision",
+          "created_at",
+          "updated_at",
+          "deleted"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "category": {
+            "type": "string"
+          },
+          "statement": {
+            "type": "string",
+            "description": "已删除的记忆正文会被清空。"
+          },
+          "status": {
+            "enum": [
+              "candidate",
+              "confirmed",
+              "retired",
+              "conflict"
+            ]
+          },
+          "source_kind": {
+            "enum": [
+              "user_setting",
+              "user_statement",
+              "inferred"
+            ]
+          },
+          "confidence": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1
+          },
+          "source_ref": {
+            "type": "string"
+          },
+          "revision": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "effective_to": {
+            "type": "string",
+            "format": "date-time",
+            "description": "省略表示当前仍有效。"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "deleted": {
+            "type": "boolean"
+          }
+        }
+      }
+    },
+    "devices": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "description": "设备对外表示。刻意不下发 push_token：客户端本就持有它，回传只会增加它出现在日志与代理链路里的机会。",
+        "required": [
+          "id",
+          "platform",
+          "name",
+          "capabilities",
+          "created_at",
+          "updated_at"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "platform": {
+            "enum": [
+              "ios",
+              "android",
+              "macos",
+              "unknown"
+            ]
+          },
+          "name": {
+            "type": "string"
+          },
+          "capabilities": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "boolean"
+            }
+          },
+          "last_seen_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "省略表示从未上报过在线时间。"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      }
+    }
+  }
+}

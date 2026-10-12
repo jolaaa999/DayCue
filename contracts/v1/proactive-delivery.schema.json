@@ -1,0 +1,191 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://daycue.local/contracts/v1/proactive-delivery.schema.json",
+  "title": "ProactiveMessageDelivery",
+  "description": "主动消息一次调度的结果与投递状态，对应 proactive.DeliveryResult、proactive.Decision 与 push.Receipt。投递状态刻意没有 read：服务端无法知道用户是否读过，凭空造一个 read 状态就是欺骗用户。持久化账本表 proactive_message.state 另有取值 pending、delivered、suppressed、expired、cancelled。当前服务端还没有暴露 HTTP 端点。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "outcome",
+    "decision",
+    "receipt"
+  ],
+  "properties": {
+    "outcome": {
+      "enum": [
+        "accepted",
+        "delivered",
+        "suppressed",
+        "deferred",
+        "failed"
+      ],
+      "description": "accepted=推送服务已受理，不等于设备收到；delivered=供应商回报设备已确认送达；suppressed=按策略彻底放弃；deferred=只是推迟，之后仍应重试；failed=已尝试投递但失败。"
+    },
+    "reason": {
+      "enum": [
+        "",
+        "dedupe",
+        "daily_budget",
+        "cooldown",
+        "expired",
+        "not_due_yet",
+        "quiet_hours_deferred"
+      ],
+      "description": "suppressed 或 deferred 的原因；空串表示已发送或无需说明。"
+    },
+    "dedupe_key": {
+      "type": "string"
+    },
+    "kind": {
+      "type": "string"
+    },
+    "decision": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "完整判定，便于审计为什么发或不发。",
+      "required": [
+        "send",
+        "deliver_at",
+        "suppressed",
+        "deferred",
+        "reason"
+      ],
+      "properties": {
+        "send": {
+          "type": "boolean"
+        },
+        "deliver_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "suppressed": {
+          "type": "boolean"
+        },
+        "deferred": {
+          "type": "boolean"
+        },
+        "reason": {
+          "enum": [
+            "",
+            "dedupe",
+            "daily_budget",
+            "cooldown",
+            "expired",
+            "not_due_yet",
+            "quiet_hours_deferred"
+          ]
+        }
+      }
+    },
+    "failure": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind"
+      ],
+      "description": "推送失败详情。detail 不得包含推送令牌明文或通知正文。",
+      "properties": {
+        "kind": {
+          "enum": [
+            "not_configured",
+            "unsupported_platform",
+            "missing_token",
+            "invalid_token",
+            "empty_message",
+            "expired",
+            "rate_limited",
+            "provider_unavailable",
+            "provider_auth",
+            "permanent"
+          ]
+        },
+        "provider": {
+          "type": "string"
+        },
+        "status_code": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "detail": {
+          "type": "string"
+        }
+      }
+    },
+    "receipt": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "推送回执，对应 push.Receipt；无论成功失败都会返回，便于调用方按设备记账。",
+      "required": [
+        "provider",
+        "status",
+        "accepted_at"
+      ],
+      "properties": {
+        "provider": {
+          "type": "string",
+          "description": "供应商标识，例如 apns、fcm；没有通道认领时为空串。"
+        },
+        "message_id": {
+          "type": "string",
+          "description": "供应商侧标识，用于对账。"
+        },
+        "device_id": {
+          "type": "string"
+        },
+        "status": {
+          "enum": [
+            "accepted",
+            "delivered",
+            "failed"
+          ]
+        },
+        "accepted_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "delivered_at": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "date-time",
+          "description": "只有供应商明确回报送达才有值。"
+        },
+        "failure": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind"
+          ],
+          "description": "推送失败详情。detail 不得包含推送令牌明文或通知正文。",
+          "properties": {
+            "kind": {
+              "enum": [
+                "not_configured",
+                "unsupported_platform",
+                "missing_token",
+                "invalid_token",
+                "empty_message",
+                "expired",
+                "rate_limited",
+                "provider_unavailable",
+                "provider_auth",
+                "permanent"
+              ]
+            },
+            "provider": {
+              "type": "string"
+            },
+            "status_code": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "detail": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    }
+  }
+}

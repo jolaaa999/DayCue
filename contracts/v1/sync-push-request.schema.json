@@ -1,0 +1,65 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://daycue.local/contracts/v1/sync-push-request.schema.json",
+  "title": "SyncPushRequest",
+  "description": "POST /v1/sync/push 请求体。服务端逐条独立结算，结果与入参一一对应且同序。没有 user_id 字段：归属只由令牌决定。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "items"
+  ],
+  "properties": {
+    "items": {
+      "type": "array",
+      "maxItems": 500,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "type",
+          "id",
+          "base_version"
+        ],
+        "properties": {
+          "type": {
+            "enum": [
+              "task",
+              "note",
+              "capture",
+              "course",
+              "course_instance",
+              "follow_up",
+              "memory",
+              "place",
+              "geo_rule",
+              "proactive_message"
+            ],
+            "description": "同步实体种类，取值直接进库，发布后不可改名。"
+          },
+          "id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "base_version": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "客户端所基于的服务端版本；0 表示客户端认为这是新增。"
+          },
+          "payload": {
+            "description": "实体自身的 JSON。删除时应省略或为 null；服务端会校验它是否为合法 JSON。"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "可省略；省略时服务端取当前时间。"
+          },
+          "deleted": {
+            "type": "boolean",
+            "default": false,
+            "description": "true 表示写墓碑而不是内容。"
+          }
+        }
+      }
+    }
+  }
+}

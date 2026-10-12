@@ -1,0 +1,67 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://daycue.local/contracts/v1/register-request.schema.json",
+  "title": "RegisterRequest",
+  "description": "POST /v1/auth/register 请求体。这是仅有的两个匿名端点之一。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "email",
+    "password"
+  ],
+  "properties": {
+    "email": {
+      "type": "string",
+      "maxLength": 320,
+      "description": "登录邮箱。服务端同时校验非空、不含空白字符、恰好一个 @ 且 @ 不在首尾；上限来自 api.maxEmailChars。"
+    },
+    "password": {
+      "type": "string",
+      "minLength": 8,
+      "maxLength": 1024,
+      "description": "服务端按字节校验 8 到 1024 字节，此处按字符数近似表达。"
+    },
+    "display_name": {
+      "type": "string",
+      "description": "显示名，可省略；服务端会 TrimSpace，不设长度上限。"
+    },
+    "device": {
+      "description": "设备信息。字段与 POST /v1/devices 的请求体完全一致。没有 user_id 字段：归属只由访问令牌决定，带了额外字段会被 400 拒绝。",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 8,
+          "maxLength": 64,
+          "pattern": "^[A-Za-z0-9_-]+$",
+          "description": "可省略；省略时服务端生成 dev_ 前缀的随机 ID。提供时必须匹配 pattern 且长度为 8 到 64。"
+        },
+        "platform": {
+          "enum": [
+            "ios",
+            "android",
+            "macos",
+            "unknown"
+          ],
+          "description": "可省略，默认 unknown。取值与 0001_init.sql 里 device.platform 的 CHECK 约束一致。"
+        },
+        "name": {
+          "type": "string",
+          "maxLength": 120
+        },
+        "capabilities": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "boolean"
+          },
+          "description": "能力开关；省略时服务端存为空对象。"
+        },
+        "push_token": {
+          "type": "string",
+          "description": "推送令牌。服务端不设长度上限，且在响应里永不回传该字段。"
+        }
+      }
+    }
+  }
+}

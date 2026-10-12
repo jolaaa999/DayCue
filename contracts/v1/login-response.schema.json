@@ -1,0 +1,34 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://daycue.local/contracts/v1/login-response.schema.json",
+  "title": "LoginResponse",
+  "description": "POST /v1/auth/login 成功时返回 200 OK。登录不会登记设备，因此没有 device 字段。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "user_id",
+    "email",
+    "token",
+    "expires_at"
+  ],
+  "properties": {
+    "user_id": {
+      "type": "string"
+    },
+    "email": {
+      "type": "string"
+    },
+    "display_name": {
+      "type": "string",
+      "description": "省略表示空显示名。"
+    },
+    "token": {
+      "type": "string",
+      "description": "自包含访问令牌；后续请求放在 Authorization: Bearer 头里。"
+    },
+    "expires_at": {
+      "type": "string",
+      "format": "date-time"
+    }
+  }
+}

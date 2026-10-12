@@ -1,0 +1,41 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://daycue.local/contracts/v1/device-request.schema.json",
+  "title": "DeviceUpsertRequest",
+  "description": "POST /v1/devices 请求体：登记或更新一台设备。响应为 device-response.schema.json，首次登记返回 201，更新返回 200。",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "id": {
+      "type": "string",
+      "minLength": 8,
+      "maxLength": 64,
+      "pattern": "^[A-Za-z0-9_-]+$",
+      "description": "可省略；省略时服务端生成 dev_ 前缀的随机 ID。提供时必须匹配 pattern 且长度为 8 到 64。"
+    },
+    "platform": {
+      "enum": [
+        "ios",
+        "android",
+        "macos",
+        "unknown"
+      ],
+      "description": "可省略，默认 unknown。取值与 0001_init.sql 里 device.platform 的 CHECK 约束一致。"
+    },
+    "name": {
+      "type": "string",
+      "maxLength": 120
+    },
+    "capabilities": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "boolean"
+      },
+      "description": "能力开关；省略时服务端存为空对象。"
+    },
+    "push_token": {
+      "type": "string",
+      "description": "推送令牌。服务端不设长度上限，且在响应里永不回传该字段。"
+    }
+  }
+}

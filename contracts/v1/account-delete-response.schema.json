@@ -1,0 +1,6 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://daycue.local/contracts/v1/account-delete-response.schema.json",
+  "title": "DeleteAccountResponse",
+  "description": "DELETE /v1/account 成功时返回 204 No Content，没有任何响应体。本文件只用于在契约目录里登记该状态与语义：删除在同一事务里清掉同步记录、索引、记忆、媒体元数据与设备，账号行写墓碑而非物理删除，因此同一邮箱可以重新注册。任何非 2xx 情况都用 error.schema.json。"
+}
