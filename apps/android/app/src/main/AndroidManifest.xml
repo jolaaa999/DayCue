@@ -1,0 +1,95 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!--
+      权限清单遵循一条规则：每一项都必须有被拒绝后的降级路径，拒绝任何一项都不能让 App 变成不可用。
+      因此这里不申请 READ_CALENDAR / WRITE_CALENDAR —— Android 端不假定能访问系统日历，
+      课表以 App 自建为准（Apple 提醒事项同理，Android 侧只用 App 内待办）。
+    -->
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+
+    <!-- 录音：拒绝后仍可文字记录 -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <!-- 拍照：拒绝后仍可用系统图片选择器选已有图片 -->
+    <uses-permission android:name="android.permission.CAMERA" />
+    <!-- 通知（Android 13+ 运行时权限）：拒绝后今天页仍显示待办与待回复 -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!--
+      精确闹钟：Android 12+ 需要用户在系统设置里单独授予（SCHEDULE_EXACT_ALARM 不是运行时弹窗权限）。
+      不申请 USE_EXACT_ALARM —— 那个只给闹钟/日历类应用，滥用会被商店拒审。
+      未获授权时降级为 setWindow/setAndAllowWhileIdle 的不精确提醒，并在设置页明确告知用户。
+    -->
+    <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
+    <!-- 重启后重建已安排的本地提醒；没有它，重启会让所有提醒静默消失 -->
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <!-- 定位：只用于用户显式开启的地点规则；不做后台连续定位，因此不申请 ACCESS_BACKGROUND_LOCATION -->
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+
+    <!-- 硬件都不做 required，缺摄像头的设备也要能装（定位规则会自动禁用） -->
+    <uses-feature android:name="android.hardware.camera.any" android:required="false" />
+    <uses-feature android:name="android.hardware.microphone" android:required="false" />
+    <uses-feature android:name="android.hardware.location" android:required="false" />
+    <uses-feature android:name="android.hardware.location.gps" android:required="false" />
+
+    <application
+        android:name=".DayCueApplication"
+        android:allowBackup="false"
+        android:dataExtractionRules="@xml/data_extraction_rules"
+        android:fullBackupContent="@xml/backup_rules"
+        android:icon="@mipmap/ic_launcher"
+        android:label="@string/app_name"
+        android:supportsRtl="true"
+        android:theme="@style/Theme.DayCue">
+
+        <activity
+            android:name=".MainActivity"
+            android:exported="true"
+            android:label="@string/app_name"
+            android:launchMode="singleTop"
+            android:theme="@style/Theme.DayCue"
+            android:windowSoftInputMode="adjustResize">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <!--
+          AlarmManager 到点后由它发通知。这里不用 WorkManager：WorkManager 是「不保证准点」的，
+          用它冒充到点提醒会违反「不用 WorkManager 冒充精确提醒」这条设计约束。
+        -->
+        <receiver
+            android:name=".platform.notify.ReminderAlarmReceiver"
+            android:exported="false" />
+
+        <!-- 重启后重建闹钟与 WorkManager 周期作业 -->
+        <receiver
+            android:name=".platform.notify.BootCompletedReceiver"
+            android:enabled="true"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+            </intent-filter>
+        </receiver>
+
+        <!--
+          关掉 WorkManager 的默认初始化，改由 DayCueApplication 通过 Configuration.Provider 提供配置。
+          这样初始化时机由 App 自己掌握：容器（数据库、仓储）先就绪，Worker 才可能被创建，
+          否则 Worker 第一次运行时会拿到一个还没建好的容器。
+        -->
+        <provider
+            android:name="androidx.startup.InitializationProvider"
+            android:authorities="${applicationId}.androidx-startup"
+            android:exported="false"
+            tools:node="merge"
+            xmlns:tools="http://schemas.android.com/tools">
+            <meta-data
+                android:name="androidx.work.WorkManagerInitializer"
+                android:value="androidx.startup"
+                tools:node="remove" />
+        </provider>
+    </application>
+</manifest>

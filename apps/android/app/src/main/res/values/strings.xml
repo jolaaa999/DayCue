@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- 通知与后台组件拿不到 Compose 的上下文，所以这些文案必须在这里。 -->
+    <string name="app_name">DayCue</string>
+
+    <string name="notify_channel_reminder_name">任务提醒</string>
+    <string name="notify_channel_reminder_desc">用户明确设定时刻的任务提醒</string>
+    <string name="notify_channel_follow_up_name">课后追问</string>
+    <string name="notify_channel_follow_up_desc">课程预计结束后的追问</string>
+    <string name="notify_channel_system_name">同步与权限</string>
+    <string name="notify_channel_system_desc">后台同步失败、权限降级等需要用户知道的系统消息</string>
+
+    <string name="notify_exact_alarm_degraded">系统未授予精确闹钟权限，提醒可能延迟数分钟；可在系统设置里允许「闹钟和提醒」。</string>
+    <string name="notify_location_unavailable">本机没有可用的定位能力，地点规则已禁用。</string>
+</resources>

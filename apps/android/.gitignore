@@ -1,0 +1,24 @@
+# Gradle 构建产物
+.gradle/
+build/
+*/build/
+
+# 本机 SDK 路径：绝不能入库（每台机器的 Android SDK 位置都不同）
+local.properties
+
+# Android 产物
+*.apk
+*.aab
+*.ap_
+*.dex
+captures/
+.cxx/
+
+# IDE
+.idea/
+*.iml
+*.hprof
+
+# Keystore：签名材料绝不入库
+*.jks
+*.keystore

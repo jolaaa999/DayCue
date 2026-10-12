@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 极简占位图标：一个对勾。真正的品牌图标应由设计给出后替换，这里只保证工程可构建。 -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M44,72 L28,56 L34,50 L44,60 L74,30 L80,36 Z" />
+</vector>

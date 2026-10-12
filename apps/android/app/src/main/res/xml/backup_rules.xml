@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  备份策略：全部排除。
+  笔记、课表、记忆都属于个人数据，且后端地址与令牌也在本地；在「数据导出/清除」策略定下来之前，
+  不把它们交给系统的云备份（Android 12 以下用这份规则，12 及以上看 data_extraction_rules.xml）。
+-->
+<full-backup-content>
+    <exclude domain="database" path="." />
+    <exclude domain="sharedpref" path="." />
+    <exclude domain="file" path="." />
+</full-backup-content>

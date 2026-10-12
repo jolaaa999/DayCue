@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!--
+      Compose 应用只需要一个「无 ActionBar 的容器主题」。
+      这里用平台主题而不是 Theme.Material3.*，是为了不额外引入 com.google.android.material XML 依赖：
+      Compose 的 Material3 组件不读 XML 主题，二者相互独立。
+    -->
+    <style name="Theme.DayCue" parent="android:Theme.Material.Light.NoActionBar">
+        <item name="android:windowBackground">@android:color/white</item>
+        <item name="android:statusBarColor">@android:color/white</item>
+        <item name="android:navigationBarColor">@android:color/white</item>
+        <item name="android:windowLightStatusBar">true</item>
+    </style>
+</resources>
