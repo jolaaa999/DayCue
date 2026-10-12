@@ -52,6 +52,14 @@ android {
             isReturnDefaultValues = true
         }
     }
+
+    sourceSets {
+        // 把 KSP 导出的 schema 挂进 androidTest 的 assets。
+        // 为什么必须挂：MigrationTestHelper 是在设备上通过 Instrumentation 的 assets 去读
+        // 「上一版的建表快照」，目录不在 assets 里就只会在真机上抛 FileNotFoundException，
+        // 本地编译期完全看不出来；挂上之后迁移测试才真的能验到 MIGRATION_1_2。
+        getByName("androidTest").assets.srcDir("$projectDir/schemas")
+    }
 }
 
 kotlin {

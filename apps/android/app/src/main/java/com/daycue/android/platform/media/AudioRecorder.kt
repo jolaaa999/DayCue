@@ -22,7 +22,7 @@ import java.io.File
 /**
  * 录音。
  *
- * 输出 AAC/m4a：iOS 端同样是 m4a，后端 /v1/transcriptions 接受 audio/* 原始字节，
+ * 输出 AAC/m4a：iOS 端同样是 m4a，后端 /v1/transcriptions 接受 audio 类型的原始字节，
  * 双端同格式能避免转码带来的时长与音质问题。
  *
  * 三条刻意的行为：

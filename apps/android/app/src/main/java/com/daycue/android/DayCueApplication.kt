@@ -4,6 +4,7 @@ import android.app.Application
 import android.util.Log
 import androidx.work.Configuration
 import com.daycue.android.platform.notify.NotificationChannels
+import com.daycue.android.platform.outbox.OutboxExecutors
 
 /**
  * 应用入口。
@@ -20,6 +21,9 @@ class DayCueApplication : Application(), Configuration.Provider {
     override fun onCreate() {
         super.onCreate()
         container = AppContainer(this)
+        // 注册 outbox 的真实执行者。不注册的话后台作业拿不到执行者，
+        // 记录只会一直留在 pending，用户看到"待执行"却永远不会动。
+        OutboxExecutors.install(container)
         NotificationChannels.ensure(this)
         // 周期作业交给 WorkManager 持久化，进程被杀掉后系统仍会择机唤醒。
         container.workScheduler.schedulePeriodic()

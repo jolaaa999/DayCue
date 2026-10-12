@@ -61,7 +61,7 @@ class DayCueApiClient(
         }
     }
 
-    /** POST /v1/transcriptions：后端只接受原始音频字节，Content-Type 必须是 audio/*。 */
+    /** POST /v1/transcriptions：后端只接受原始音频字节，Content-Type 必须是 audio 类型。 */
     suspend fun transcribe(
         audioBytes: ByteArray,
         mimeType: String,

@@ -43,6 +43,15 @@ data class NewTaskDraft(
     val remindTime: String = "",
 )
 
+/**
+ * 是否为这次新建请求外部写入。
+ *
+ * 只有带提醒的任务需要它：没有提醒的任务在 App 内待办里本来就已经存在，
+ * 一次 create_reminder 的往返只会把状态标成"已写入"，却没有任何东西被真正交付。
+ * 抽成顶层纯函数是为了让这条规则能在 JVM 单测里被直接验证，而不必把依赖 AppContainer 的 ViewModel 拖进测试。
+ */
+fun shouldRequestExternalWrite(remindAt: Instant?): Boolean = remindAt != null
+
 data class TaskUiState(
     val filter: TaskStatus = TaskStatus.OPEN,
     val tasks: List<TaskRecord> = emptyList(),
@@ -178,6 +187,8 @@ class TaskViewModel(private val container: AppContainer) : ViewModel() {
                         remindAt = remindAt,
                         zone = zone,
                         courseHint = draft.courseHint.trim().takeIf { it.isNotEmpty() },
+                        // 带提醒的任务在保存时真的入队 create_reminder；不带提醒的不入队，理由见上面那条纯函数。
+                        requestExternalWrite = shouldRequestExternalWrite(remindAt),
                     ),
                 )
             }
@@ -242,24 +253,30 @@ class TaskViewModel(private val container: AppContainer) : ViewModel() {
         return notices
     }
 
-    fun complete(taskId: String) = mutate { container.taskRepository.complete(taskId) }
+    fun complete(taskId: String) = mutate(taskId) { container.taskRepository.complete(taskId) }
 
-    fun reopen(taskId: String) = mutate { container.taskRepository.reopen(taskId) }
+    fun reopen(taskId: String) = mutate(taskId) { container.taskRepository.reopen(taskId) }
 
-    fun cancel(taskId: String) = mutate { container.taskRepository.cancel(taskId) }
+    fun cancel(taskId: String) = mutate(taskId) { container.taskRepository.cancel(taskId) }
 
-    fun delete(taskId: String) = mutate { container.taskRepository.softDelete(taskId) }
+    fun delete(taskId: String) = mutate(taskId) { container.taskRepository.softDelete(taskId) }
+
+    /** 清掉提醒：仓储抹掉提醒时刻并排队 delete_reminder 撤回 App 内待办投影，这里再撤掉本地闹钟。 */
+    fun clearReminder(taskId: String) = mutate(taskId) { container.taskRepository.clearReminder(taskId) }
 
     /**
      * 改状态后总是取消本地闹钟。
      *
      * 已完成或已删除的任务如果还留着闹钟，用户会在几天后被一条已经不存在的待办叫醒；
      * 重新打开时若还想要提醒，需要显式再设一次，这比「静默保留」更不容易搞错。
+     *
+     * 取消必须发生在写库成功之后：反过来的话，写库失败时闹钟已经没了，用户以为提醒还在却不会响。
      */
-    private fun mutate(action: suspend () -> Unit) {
+    private fun mutate(taskId: String, action: suspend () -> Unit) {
         viewModelScope.launch {
             runCatching {
                 action()
+                container.reminderScheduler.cancelLocalAlarm(taskId)
             }.onSuccess {
                 reload()
             }.onFailure { error ->

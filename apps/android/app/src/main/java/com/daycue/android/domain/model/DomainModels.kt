@@ -113,7 +113,7 @@ enum class ExternalWriteState(val raw: String, val displayName: String) {
     NOT_REQUESTED("not_requested", "仅保存在 App"),
     WAITING_FOR_PERMISSION("waiting_for_permission", "等待授权"),
     PENDING("pending", "等待写入"),
-    WRITTEN("written", "已写入"),
+    WRITTEN("written", "已登记到 App 内待办"),
     FAILED("failed", "写入失败"),
     UNKNOWN("unknown", "写入状态未知，待对账"),
     NEEDS_RECONCILIATION("needs_reconciliation", "写入状态待对账"),
@@ -327,6 +327,13 @@ enum class OutboxState(val raw: String, val displayName: String) {
     SUCCEEDED("succeeded", "已完成"),
     FAILED("failed", "失败"),
     UNKNOWN("unknown", "结果未知，待对账"),
+    // 两个终止态。它们不在可执行查询（只认 pending）范围内，所以不会被无限重试。
+    // 之所以要和 FAILED 分开：FAILED 是"试过了、失败了"，
+    // DEAD_LETTER 是"这个操作根本无法执行"（没有执行者、与当前端能力不匹配），
+    // 两者对用户的含义完全不同，混在一起会让人以为"再等等就好了"。
+    // 另外 outbox 是各端本机队列、不参与同步，所以这里与 iOS 的枚举名单不必严格一致。
+    DEAD_LETTER("dead_letter", "无法执行，已终止"),
+    CANCELLED("cancelled", "已取消"),
     ;
 
     /** 只有 pending 能被后台作业重试。running 说明进程上次中断，需要先对账再决定。 */

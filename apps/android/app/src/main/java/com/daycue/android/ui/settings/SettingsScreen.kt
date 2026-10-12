@@ -275,7 +275,7 @@ fun SettingsScreen() {
             item {
                 KeyValueLine(
                     label = "待同步操作",
-                    value = if (state.outboxPending == 0) "0 条" else state.outboxPending.toString() + " 条（尚未接入外部写入，会一直留在这里）",
+                    value = if (state.outboxPending == 0) "0 条" else state.outboxPending.toString() + " 条（写入 App 内待办；失败按退避重试，到上限即终止）",
                 )
             }
 

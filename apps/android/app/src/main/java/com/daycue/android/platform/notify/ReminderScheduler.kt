@@ -146,7 +146,20 @@ class ReminderScheduler(private val context: Context) {
         val showDegradedNotice = !useExact && (exact || channelId == NotificationChannels.REMINDER)
         val text = if (showDegradedNotice) body + "\n" + appContext.getString(R.string.notify_exact_alarm_degraded) else body
 
-        val pendingIntent = buildPendingIntent(key, channelId, title, text, followUp, PendingIntent.FLAG_UPDATE_CURRENT)
+        // buildPendingIntent 声明为可空，是因为取消路径用的是 FLAG_NO_CREATE（找不到旧的就该是 null）。
+        // 这里传的是 FLAG_UPDATE_CURRENT，语义上一定会创建一个；但类型上仍是可空，
+        // 所以必须显式处理：拿不到就放弃安排这一次，而不能用 !! 把「闹钟没排上」变成崩溃。
+        val pendingIntent = buildPendingIntent(
+            key,
+            channelId,
+            title,
+            text,
+            followUp,
+            PendingIntent.FLAG_UPDATE_CURRENT,
+        ) ?: run {
+            Log.w(NOTIFY_LOG_TAG, "系统拒绝创建 PendingIntent，本次提醒未安排：" + key)
+            return
+        }
         try {
             if (useExact) {
                 alarmManager.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, triggerAtMillis, pendingIntent)

@@ -32,6 +32,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.daycue.android.domain.model.DueKind
+import com.daycue.android.domain.model.ExternalWriteState
 import com.daycue.android.domain.model.TaskStatus
 import com.daycue.android.ui.common.DayCueScreen
 import com.daycue.android.ui.common.EmptyState
@@ -117,12 +118,13 @@ fun TaskListScreen(onBack: () -> Unit) {
                             dueText = formatTaskDue(task),
                             reminderText = formatTaskReminder(task),
                             status = task.status,
-                            writeStateName = task.externalWriteState.displayName,
-                            writeNeedsAttention = task.externalWriteState.needsAttention,
+                            writeState = task.externalWriteState,
+                            hasReminder = task.remindUtc != null,
                             onComplete = { viewModel.complete(task.id) },
                             onReopen = { viewModel.reopen(task.id) },
                             onCancel = { viewModel.cancel(task.id) },
                             onDelete = { viewModel.delete(task.id) },
+                            onClearReminder = { viewModel.clearReminder(task.id) },
                         )
                     }
                 }
@@ -148,24 +150,19 @@ private fun TaskRow(
     dueText: String,
     reminderText: String?,
     status: TaskStatus,
-    writeStateName: String,
-    writeNeedsAttention: Boolean,
+    writeState: ExternalWriteState,
+    hasReminder: Boolean,
     onComplete: () -> Unit,
     onReopen: () -> Unit,
     onCancel: () -> Unit,
     onDelete: () -> Unit,
+    onClearReminder: () -> Unit,
 ) {
     Column(Modifier.fillMaxWidth().padding(vertical = 6.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text(title, style = MaterialTheme.typography.bodyLarge, modifier = Modifier.weight(1f))
-            WriteStateBadge(
-                state = if (writeNeedsAttention) {
-                    com.daycue.android.domain.model.ExternalWriteState.WAITING_FOR_PERMISSION
-                } else {
-                    com.daycue.android.domain.model.ExternalWriteState.WRITTEN
-                },
-                modifier = Modifier.padding(start = 8.dp),
-            )
+            // 直接渲染真实状态，不再把"没请求过"也画成"已写入"：那等于在界面上虚报同步成功。
+            WriteStateBadge(state = writeState, modifier = Modifier.padding(start = 8.dp))
         }
         if (!detail.isNullOrBlank()) {
             Text(detail, style = MaterialTheme.typography.bodyMedium)
@@ -176,7 +173,8 @@ private fun TaskRow(
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
         Text(
-            text = "外部写入：" + writeStateName,
+            // Android 的"外部写入"目标就是 App 内待办本身；不写清目标，用户会以为写进了系统日历。
+            text = "App 内待办登记：" + writeState.displayName,
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
@@ -185,6 +183,9 @@ private fun TaskRow(
                 TaskStatus.OPEN -> {
                     TextButton(onClick = onComplete) { Text("完成") }
                     TextButton(onClick = onCancel) { Text("取消") }
+                    if (hasReminder) {
+                        TextButton(onClick = onClearReminder) { Text("清除提醒") }
+                    }
                 }
 
                 TaskStatus.DONE -> TextButton(onClick = onReopen) { Text("重新打开") }

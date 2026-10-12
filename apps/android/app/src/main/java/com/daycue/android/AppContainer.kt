@@ -80,6 +80,27 @@ class AppContainer(context: Context) {
     )
     val settingsRepository = SettingsRepository(database.appSettingDao(), timeSource)
 
+    init {
+        // 仓储之间的装配。
+        //
+        // TaskRepository 的这两个钩子声明成可空、注释写着「由 Application 装配时注入」，
+        // 但装配这一步此前从来没做 —— 两个钩子永远是 null，于是：
+        //   1) 任务被删除/完成时不写墓碑，对账缺了基准，"删除后同步不复活"就无从谈起；
+        //   2) 拿到外部写入回执后不拍快照，三方对账永远拿不到上次的字段值。
+        // 这里用回调而不是让两个仓储互相持有实例，避免构造顺序上的循环依赖。
+        taskRepository.tombstoneRecorder = { taskId, _ ->
+            syncRepository.recordTombstone(SyncRepository.ENTITY_TYPE_TASK, taskId)
+        }
+        // 快照钩子刻意保持为空。
+        //
+        // 它本来的语义是「拿到外部写入回执后拍一张字段快照」，但 SyncField 只列
+        // "用户可能在任何一端改" 的字段（标题/备注/状态/截止/提醒/清单/地点），
+        // 外部 id 不在这层，而且 task 表也还没有 external_id 列。
+        // 硬把 id 塞进某个字段会污染对账语义（下次对账会把它当成用户可改的字段去比），
+        // 所以这里如实不写：宁可少一张快照，也不要造一条假基准。
+        // 接入真实外部提供方时，先给 task 表加 external_id 列，再在这里补真实快照。
+    }
+
     // ---- 平台能力 ----
 
     val reminderScheduler = ReminderScheduler(appContext)

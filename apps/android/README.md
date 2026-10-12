@@ -3,16 +3,26 @@
 DayCue 的 Android 客户端，Kotlin + Jetpack Compose + Room。
 数据模型与 HTTP 契约对齐 iOS 端（apps/ios/Sources/DayCueCore/Schema.swift 的 v2 段、contracts/v1/*.schema.json）。
 
-## 当前状态：这份代码从未编译过
+## 当前状态：已构建并通过单元测试，但未在设备上运行
 
-必须说清楚，不要造成误解：
+已经真实执行过（Windows + JDK 17 + Gradle 8.9 + Android SDK platform 35 / build-tools 35.0.0）：
 
-- 本机**没有** Android SDK、没有 ANDROID_HOME、没有 gradle，PATH 上的 java 还是 8（JDK 17 装在别的路径）。
-- 因此全部源码是**只写不跑**的产物：它没有经过 kotlinc 编译、没有跑过 lint、没有跑过任何一条单元测试。
-- 首次构建时请预期需要修若干编译错误（拼写、导入、API 细节）。**不要**把「这里没有报错」当成「它能编译」。
-- Gradle Wrapper 的 gradle-wrapper.jar **没有**提交（二进制文件不在本仓库的交付范围内），
-  第一次构建前必须先补齐，见下方「首次构建」。
-- Room 的 schema JSON（app/schemas/2.json）同样没有生成，它是构建产物。
+    gradlew.bat --no-daemon --console=plain :app:assembleDebug :app:testDebugUnitTest
+    # BUILD SUCCESSFUL in 1m 40s
+
+- 产物 `app/build/outputs/apk/debug/app-debug.apk`（约 11.8 MB）。
+- **174 个 JVM 单元测试全部通过，0 失败 0 错误 0 跳过**（15 个测试类）。
+- Room schema 已由 KSP 导出到 `app/schemas/com.daycue.android.data.local.DayCueDatabase/2.json`，
+  并已入库；它不是手工编写的文件。
+- Gradle Wrapper（含 `gradle-wrapper.jar`）已入库，**不需要**先装 Gradle。
+
+**仍然未验证的部分**（不要把它们当成已通过）：
+
+- **没有任何真机或模拟器跑过这个 APK。** 通知弹窗、后台作业调度（WorkManager）、
+  定位、录音、精确闹钟在真实系统上的行为全部未验证。
+- `src/androidTest/` 里的 DAO 测试需要设备，本机未执行；
+  `MIGRATION_1_2` 的迁移正确性同样只能在那时验证。
+- 「能编译 + 单元测试通过」≠「功能可用」。前者是构建证据，后者要设备验收。
 
 ## 目录结构
 
@@ -21,11 +31,11 @@ DayCue 的 Android 客户端，Kotlin + Jetpack Compose + Room。
       build.gradle.kts              根构建脚本，只声明插件不 apply
       gradle.properties             JVM 参数、AndroidX 开关、kotlin 官方代码风格
       gradle/libs.versions.toml     版本目录：所有依赖版本唯一来源
-      gradle/wrapper/               gradle-wrapper.properties（jar 缺失，需先生成）
+      gradle/wrapper/               gradle-wrapper.properties + gradle-wrapper.jar（均已入库）
       app/
         build.gradle.kts            android/kotlin/compose/serialization/ksp 插件与依赖
         proguard-rules.pro          kotlinx.serialization / OkHttp / WorkManager 保留规则
-        schemas/                    Room 导出的 schema（构建后生成，当前只有说明文件）
+        schemas/                    Room 导出的 schema（已生成 2.json 并入库）
         src/main/AndroidManifest.xml 权限与组件声明（每条权限都有降级路径）
         src/main/res/               字符串、主题、图标、备份规则
         src/main/java/com/daycue/android/
@@ -42,28 +52,24 @@ DayCue 的 Android 客户端，Kotlin + Jetpack Compose + Room。
         src/test/                   JVM 单元测试（不需要设备）
         src/androidTest/            需要设备/模拟器的 DAO 测试（本机未执行）
 
-## 首次构建
+## 构建
 
-前置条件：
+前置条件（只需两样，Wrapper 已入库）：
 
 1. **JDK 17**。项目用 JVM target 17；用 JDK 8 会在 Kotlin 编译阶段直接失败。
    确认方式：`java -version` 输出的第一行含 `17`。
-2. **Android SDK Platform 35 + Build-Tools 35**，并设置 `ANDROID_HOME`（或写 `local.properties` 的 `sdk.dir`）。
-3. **补齐 Gradle Wrapper 的 jar**。在能联网的机器上执行（任选其一）：
-   - `gradle wrapper --gradle-version 8.9`（需要本机已装 gradle）；
-   - 或从任意 gradle 8.9 分发包里拷贝 `gradle/wrapper/gradle-wrapper.jar` 到本目录。
-   没有这个 jar，`./gradlew` 无法启动。
+   构建时显式指定：`$env:JAVA_HOME='C:\Program Files\Java\jdk-17'`。
+2. **Android SDK Platform 35 + Build-Tools 35**，并设置 `ANDROID_HOME`
+   （或写 `local.properties` 的 `sdk.dir`）。
 
-然后：
+然后（Windows 用 `gradlew.bat`，且务必 `--no-daemon`：项目 JVM 参数会另起一次性守护进程，
+用完即走，避免残留进程锁住 build 目录）：
 
     cd apps/android
-    ./gradlew :app:assembleDebug        # 打 debug 包
-    ./gradlew :app:testDebugUnitTest    # 跑 JVM 单元测试（不需要设备）
-    ./gradlew :app:lintDebug            # lint
+    gradlew.bat --no-daemon :app:assembleDebug        # 打 debug 包
+    gradlew.bat --no-daemon :app:testDebugUnitTest    # 跑 JVM 单元测试（不需要设备）
 
-Windows 上用 `gradlew.bat` 代替 `./gradlew`。
-
-首次构建后会出现两样构建产物，请一并提交或按团队约定处理：
+构建产物：
 
 - `app/schemas/2.json`：Room 导出的 schema，是迁移测试的输入。**没有它就是后续改表没有比对基准。**
 - `app/build/`：不要在仓库里提交（已在 .gitignore 中）。

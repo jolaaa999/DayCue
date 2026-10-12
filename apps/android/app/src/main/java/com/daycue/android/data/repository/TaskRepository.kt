@@ -100,19 +100,79 @@ class TaskRepository(
         )
     }
 
-    suspend fun complete(taskId: String) = setStatus(taskId, TaskStatus.DONE)
+    /**
+     * 完成一条任务：落状态之后撤回 App 内待办投影。
+     *
+     * 为什么完成也要撤回：提醒的意义是"提醒你去做这件还没做完的事"，
+     * 任务已经完成还留着外部对象，就是一条永远不该再响的提醒。
+     */
+    suspend fun complete(taskId: String) {
+        setStatus(taskId, TaskStatus.DONE)
+        withdrawReminderIfProjected(taskId)
+    }
 
+    /** 重新打开只改状态，不自动补投影：要提醒需要显式再设一次，避免静默复活一条旧的外部对象。 */
     suspend fun reopen(taskId: String) = setStatus(taskId, TaskStatus.OPEN)
 
-    suspend fun cancel(taskId: String) = setStatus(taskId, TaskStatus.CANCELLED)
+    suspend fun cancel(taskId: String) {
+        setStatus(taskId, TaskStatus.CANCELLED)
+        withdrawReminderIfProjected(taskId)
+    }
 
     suspend fun setStatus(taskId: String, status: TaskStatus) {
         dao.updateStatus(taskId, status, timeSource.now())
     }
 
+    /**
+     * 用户清掉提醒：抹掉提醒时刻，并撤回 App 内待办投影。
+     *
+     * 先改库再排队：提醒时刻落库成功才代表"用户要取消"这件事成立；
+     * 排队失败时至少时刻已经没了，不会出现"界面显示无提醒、闹钟照响"。
+     */
+    suspend fun clearReminder(taskId: String) {
+        val now = timeSource.now()
+        val task = dao.findById(taskId) ?: return
+        val wasProjected = needsWithdrawal(task)
+        dao.update(task.copy(remindLocal = null, remindUtc = null, updatedAt = now))
+        if (wasProjected) enqueueReminderDeletion(taskId, now)
+    }
+
+    /**
+     * "这条任务是否真的被投影出去过"。
+     *
+     * 没有提醒、也从未请求过外部写入的任务根本不存在外部对象，
+     * 对它排队 delete_reminder 就是一次无意义的往返——这与 create 端"只有带提醒才入队"是同一条规则。
+     */
+    private fun needsWithdrawal(task: TaskRecord?): Boolean =
+        task != null && (task.remindUtc != null || task.externalWriteState != ExternalWriteState.NOT_REQUESTED)
+
+    private suspend fun withdrawReminderIfProjected(taskId: String) {
+        if (!needsWithdrawal(dao.findById(taskId))) return
+        enqueueReminderDeletion(taskId, timeSource.now())
+    }
+
+    /**
+     * 排队撤回 App 内待办投影。
+     *
+     * external_id 用与 TaskBackedInAppTodoStore 相同的确定性前缀：Android 唯一的外部目标就是
+     * App 内待办，它的 id 由 taskId 决定，不需要（也没有）一张单独的外部 id 表。
+     */
+    private suspend fun enqueueReminderDeletion(taskId: String, now: Instant) {
+        outboxDao.enqueue(
+            OutboxOperations.deleteReminder(
+                taskId = taskId,
+                externalId = APP_TODO_ID_PREFIX + taskId,
+                now = now,
+            ),
+        )
+    }
+
     suspend fun softDelete(taskId: String) {
         val now = timeSource.now()
+        // 先读后删：软删除之后 findById 就查不到了，而"要不要撤回投影"必须依据删除前的状态判断。
+        val wasProjected = needsWithdrawal(dao.findById(taskId))
         dao.softDelete(taskId, now)
+        if (wasProjected) enqueueReminderDeletion(taskId, now)
         // 删除也要传播：没有 tombstone，别的设备会把这条任务「复活」。
         tombstoneRecorder?.invoke(taskId, now)
     }
@@ -164,5 +224,8 @@ class TaskRepository(
     companion object {
         /** 未选择清单时的默认键。契约里 create_reminder 的幂等键需要它。 */
         const val DEFAULT_LIST = "default"
+
+        /** App 内待办投影的对外标识前缀。TaskBackedInAppTodoStore 直接引用它，两处不能各抄一份。 */
+        const val APP_TODO_ID_PREFIX = "app://todo/"
     }
 }

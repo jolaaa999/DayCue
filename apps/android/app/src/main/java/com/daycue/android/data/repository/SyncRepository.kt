@@ -254,5 +254,13 @@ class SyncRepository(
 
     companion object {
         const val PROVIDER_EXTERNAL = "external"
+
+    /**
+     * 任务在同步与对账里的实体类型名。
+     *
+     * 单独提成公开常量而不是继续散落字面量：墓碑、快照、对账三处必须用同一个字符串，
+     * 抄错一个字符就会出现「墓碑记了但快照查不到」这种极难定位的不一致。
+     */
+    const val ENTITY_TYPE_TASK = "task"
     }
 }
