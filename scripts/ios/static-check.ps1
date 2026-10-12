@@ -51,7 +51,10 @@ function Get-Balance([string]$path) {
         if ($inBlock) { if ($c -eq '*' -and $c1 -eq '/') { $inBlock = $false; $i += 2; continue }; $i++; continue }
         if ($inMulti) { if ($c -eq '"' -and $c1 -eq '"' -and $c2 -eq '"') { $inMulti = $false; $i += 3; continue }; $i++; continue }
         if ($inStr) {
-            if ($c -eq '\\') { $i += 2; continue }
+            # 必须用 [char]92 比较：PowerShell 单引号不处理转义，写成 '\\'
+            # 其实是两个字符，与单个字符比较永远不相等，字符串内的 \" 就跳不过去，
+            # 字符串状态被翻转后会把后面的代码当字符串，产生大片误报。
+            if ([int][char]$c -eq 92) { $i += 2; continue }
             if ($c -eq '"') { $inStr = $false }
             $i++; continue
         }

@@ -31,6 +31,8 @@ struct SettingsView: View {
             aiSection
             behaviorSection
             dataSection
+            contentSection
+            proactiveSection
 #if DEBUG
             debugSection
 #endif
@@ -279,6 +281,77 @@ struct SettingsView: View {
             Text("数据管理")
         } footer: {
             Text("清空只影响本机数据，不会删除苹果提醒事项里的条目，也不会删除服务器上的内容。")
+                .font(.caption)
+        }
+    }
+
+    // MARK: - 内容入口（笔记 / 原始记录 / 课表 / 追问）
+
+    /// 这些页面是"回头看"的内容，入口放在设置里而不是再往底栏加标签。
+    /// 底栏固定四个是刻意的：捕获是主路径，标签越多主路径越不突出；
+    /// 而这些页面不是高频入口，放这里既够用又不喧宾夺主。
+    private var contentSection: some View {
+        Section {
+            NavigationLink {
+                NoteListView()
+            } label: {
+                Label("笔记", systemImage: "note.text")
+            }
+
+            NavigationLink {
+                CaptureListView()
+            } label: {
+                Label("原始记录", systemImage: "tray.full")
+            }
+
+            NavigationLink {
+                ScheduleView()
+            } label: {
+                Label("课表", systemImage: "calendar")
+            }
+
+            NavigationLink {
+                FollowUpView()
+            } label: {
+                Label("课后追问", systemImage: "questionmark.bubble")
+            }
+        } header: {
+            Text("内容")
+        } footer: {
+            Text("原始记录保留你当时输入的文字、转写、图片和来源，删掉笔记不会连带删掉记录。课表里的预计结束时间不等于实际下课，也不代表出勤。")
+                .font(.caption)
+        }
+    }
+
+    // MARK: - 地点与主动提醒
+
+    private var proactiveSection: some View {
+        Section {
+            NavigationLink {
+                PlaceListView()
+            } label: {
+                Label("地点", systemImage: "mappin.and.ellipse")
+            }
+
+            NavigationLink {
+                ProactiveSettingsView()
+            } label: {
+                Label("主动提醒设置", systemImage: "bell.badge")
+            }
+
+            // 这里是带编排的容器视图：它自己去取 EventKit 快照、跑三方比较、
+            // 把基线与游标写回存储，并把"需要用户确认的删除"单独列出来。
+            // 删除类决策永远不自动执行 —— 因为分不清"用户在苹果侧真删了"
+            // 和"用户手改备注把标识行弄没了"。
+            NavigationLink {
+                ReconciliationCoordinatorView()
+            } label: {
+                Label("提醒事项对账", systemImage: "arrow.triangle.2.circlepath")
+            }
+        } header: {
+            Text("地点与主动提醒")
+        } footer: {
+            Text("地点提醒只在你确认过的地点生效，默认不记录移动轨迹。主动提醒受每日预算与静默时段限制，静默时段内的消息会被推迟而不是丢弃。")
                 .font(.caption)
         }
     }

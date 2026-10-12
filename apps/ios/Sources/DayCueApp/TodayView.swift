@@ -31,6 +31,17 @@ struct TodayView: View {
         .listStyle(.insetGrouped)
         .navigationTitle("今天")
         .toolbar {
+            ToolbarItem(placement: .topBarLeading) {
+                // 课表放在今天页，是因为"今天有什么课"和"今天有什么任务"
+                // 是同一个使用场景；从设置里再找一次不合手。
+                NavigationLink {
+                    ScheduleView()
+                } label: {
+                    Image(systemName: "calendar")
+                }
+                .accessibilityLabel("课表")
+            }
+
             ToolbarItem(placement: .topBarTrailing) {
                 Button {
                     model.reload()
