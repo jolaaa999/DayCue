@@ -8,10 +8,10 @@
 
 | 部分 | 状态 |
 |---|---|
-| Go 后端 `services/api` | **已实现、已编译、已测试**：**159 个测试用例全部通过**（含 6 条连真实 PostgreSQL 的集成测试）；另有 `verify-api.ps1` 的 23 项真实 HTTP 端到端断言 |
+| Go 后端 `services/api` | **已实现、已编译、已测试**：**176 个顶层测试用例（含子测试 230）全部通过**（含 14 条连真实 PostgreSQL 的集成测试，覆盖并发冲突、并发删除、旧库升级、迁移幂等、主动账本幂等入队与并发认领互斥）；另有 `verify-api.ps1` 的真实 HTTP 端到端断言 |
 | 契约 `contracts/` | 已落地，并由后端测试强制执行。`contracts/v1/` 共 **20 个 schema**，覆盖账号 / 设备 / 同步 push+pull / 媒体 / 导出 / 账号删除 / 主动候选与投递 |
 | iOS 端 `apps/ios` | **源码已完成**：DayCueCore 60 个文件 + DayCueApp 50 个文件；测试 32 个文件；**尚未编译、尚未真机验证**（本机无 macOS / Xcode / Swift 工具链），只跑过静态检查 |
-| Android 端 `apps/android` | **源码完成且已构建**：108 个 Kotlin 文件（main 91 / test 16 / androidTest 1）；`:app:assembleDebug` 产出 APK（约 11.8 MB），**174 个 JVM 用例全部通过、0 失败**；仪器测试待设备；**未在任何真机或模拟器上运行** |
+| Android 端 `apps/android` | **源码完成且已构建**：108 个 Kotlin 文件（main 91 / test 16 / androidTest 1）；`:app:assembleDebug` 产出 app-debug.apk（12,219,339 字节），`:app:assembleDebugAndroidTest` 产出 app-debug-androidTest.apk（738,455 字节），**197 个 JVM 用例全部通过、0 失败、0 跳过**（18 个测试类）；仪器测试源码已确认可编译但**一条都没运行过**（无设备）；**未在任何真机或模拟器上运行** |
 | 课表 / 课后追问 / 长期记忆 / 位置与主动规则 / 苹果侧对账 | **源码已完成**（iOS 与 Android 双端）；Android 侧已编译并跑过单元测试，**iOS 侧未编译、两端均未上真机** |
 
 iOS 端之所以未验证：开发环境是 Windows，没有 Xcode 与 Swift 工具链。按 Xcode 版本拼凑的"已验证"结论是不诚实的，因此这里明确标注为**未验证**，并在 [apps/ios/README.md](apps/ios/README.md) 给出了 Mac 上的完整构建与真机验证步骤。

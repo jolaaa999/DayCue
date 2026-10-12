@@ -75,7 +75,7 @@
 | 确认后再写入提醒（不自动写） | ✅ | ❌ 未编译 | ❌ 未运行 | ❌ 未验证 |
 | 撤销 / 中断恢复 / 幂等 | ✅ | ❌ 未编译 | ❌ 未运行 | ❌ 未验证 |
 | 错误分类（查询失败 ≠ 不存在） | ✅ | ❌ 未编译 | ❌ 未运行 | ❌ 未验证 |
-| 后端 API 与端到端校验脚本 | ✅ | ✅ Go 已构建 | ✅ Go 已执行（159 用例） | ⚠️ 仅本机 HTTP |
+| 后端 API 与端到端校验脚本 | ✅ | ✅ Go 已构建 | ✅ Go 已执行（176 用例） | ⚠️ 仅本机 HTTP |
 
 ### 4.2 笔记（持久化与记录入口）
 
@@ -136,17 +136,41 @@
 
 ### 4.5 地点与主动规则
 
-**本轮修掉的关键断链**：系统位置事件此前没有入口。本轮新增
+**上一轮修掉的关键断链**：系统位置事件此前没有入口。新增了
 `LocationEventSource` → 新鲜度检查 → `GeoRuleEvaluator` → 候选 → 预算/静默/冷却/去重
-→ 通知安排 → 交互回执整条链，并把权限变化、启动恢复、规则增删改后的重新注册都接上。
+→ 通知安排 → 交互回执整条链的领域 / 平台 / 数据层类。
+
+**本轮修掉的关键断链（"写了类但没有调用方"）**：上面那些类此前**没有任何生产调用方**——
+`AppContainer` 没有构造 `GeoProactiveCoordinator`，`PlatformDependencies` 里没有它，
+Manifest 里没有注册 `GeoProximityReceiver` / `GeoDwellRecheckReceiver` / `ProactiveReceiptReceiver`，
+`Application`、`MainActivity`、`BootCompletedReceiver`、设置页也没有任何入口。
+本轮把这些全部接上：应用启动与开机重启后重建注册、回前台补偿复查、
+定位总开关变化触发对账、通知点击 / 划掉写回账本。**判定依据是调用链，不是"文件是否被改过"。**
+
+**本轮同时修掉一个真实缺陷（能力恢复后规则回不来）**：
+`refreshRegistration` 在"定位能力可用"分支里执行 `switchMemory.write(当前 enabled 集合)`，
+而权限被撤销→恢复的那一次，规则此刻仍全部处于暂停状态，于是写进记忆的是**空集合**：
+记忆被抹掉后，用户在权限恢复后永远拿不回自己的地点规则，且没有任何报错。
+修法是先按记忆恢复、再写记忆，并且只在"有记忆且当前一条都没开"（确实是被我们暂停过的签名）时才恢复。
+
+**通知身份与预算语义**：`ProactiveInteraction.DISMISSED` 此前映射成 `CANCELLED`，
+后果是 `deliveredAt` 留空 → 当日额度被**退还** → 用户越划掉越被同类提醒打扰。
+现在映射成 `DELIVERED`（用户划掉的前提就是已经收到），`deliveredAt` 记的是
+"交互时确认已到达"而非系统展示时刻（Android / iOS 都不提供展示回执），
+"用户关闭"与"投递前应用取消"的区别由 `stateReason` 保留。iOS 侧同一处已同步修正。
+
+**本轮补齐的编排测试**：新增 `GeoProactiveCoordinatorTest`（14 条），用替身断言的是
+**调用链真的接通了**而不是纯函数算出了什么——被预算抑制时通知安排器一次都没被调用、
+撤销权限时真的去注销了围栏、规则删除后那条已排上的通知真的被取消、
+陈旧观测在规则求值之前就被丢弃。
 
 | 功能 | 源码 | 构建 | 自动测试 | 系统/设备验证 |
 | --- | --- | --- | --- | --- |
-| 用户确认地点 / 半径 / 进入离开条件 | ✅ | ❌ 未编译 | ❌ 未运行 | ❌ 未验证 |
-| 地点提醒、日程 + 地点组合规则 | ✅ | ❌ 未编译 | ❌ 未运行 | ❌ 未验证 |
-| 新鲜度 / 去重 / 冷却 / 每日预算 / 静默时段 | ✅ 两侧都有判定 | ✅ Go 已构建 / ✅ Android 已构建 | ✅ Go 已执行 / ✅ Android 174 用例已执行 | ⚠️ 仅逻辑层 |
-| 权限被拒或位置不可用时的降级 | ✅ 不显示为正常运行 | ❌ iOS 未编译 | ❌ iOS 未运行 | ❌ 未验证 |
-| 通知撤销 / 延后 / 过期 | ✅ | ❌ 未编译 | ❌ 未运行 | ❌ 未验证 |
+| 用户确认地点 / 半径 / 进入离开条件 | ✅ | ✅ Android 已构建 / ❌ iOS 未编译 | ✅ Android 已执行（部分） | ❌ 未验证 |
+| 地点提醒、日程 + 地点组合规则 | ⚠️ 部分实现：规则可增删改的**界面入口不存在** | ✅ Android 已构建 | ✅ Android 已执行（领域层） | ❌ 未验证 |
+| 新鲜度 / 去重 / 冷却 / 每日预算 / 静默时段 | ✅ 两侧都有判定 | ✅ Go 已构建 / ✅ Android 已构建 | ✅ Go 已执行 / ✅ Android 191 用例已执行（含 14 条编排用例） | ⚠️ 仅逻辑层 |
+| 权限被拒或位置不可用时的降级 | ✅ 不显示为正常运行 | ✅ Android 已构建 / ❌ iOS 未编译 | ✅ Android 已执行（含撤销权限即注销围栏） | ❌ 未验证 |
+| 通知撤销 / 延后 / 过期 | ✅ | ✅ Android 已构建 / ❌ iOS 未编译 | ✅ Android 已执行（删除规则即取消已排通知） | ❌ 未验证 |
 | 不持续记录轨迹、不承诺室内精度 | ✅（设计约束） | — | — | ❌ 未验证 |
 
 ### 4.6 苹果侧对账与同步
@@ -162,14 +186,16 @@
 
 ### 4.7 Android 客户端
 
-**本轮最大变化：Android 不再是"只写不跑"。**
+**Android 不再是"只写不跑"。**
 本机用 JDK 17 + Gradle 8.9（Wrapper 已入库）+ Android SDK（platform 35 / build-tools 35.0.0）
-真实执行了 `:app:assembleDebug` 与 `:app:testDebugUnitTest`，**产出 app-debug.apk（11.8 MB），
-174 个 JVM 单元测试全部通过、0 失败**。Room schema 由 KSP 在 `app/schemas/` 真实生成。
+真实执行了 `:app:assembleDebug`、`:app:testDebugUnitTest` 与 `:app:assembleDebugAndroidTest`，
+三项全部 BUILD SUCCESSFUL。**产出 app-debug.apk（11.65 MiB）与 app-debug-androidTest.apk（721 KiB），
+191 个 JVM 单元测试全部通过、0 失败、0 跳过**（17 个测试类）。Room schema 由 KSP 在 `app/schemas/` 真实生成。
+`:app:assembleDebugAndroidTest` 只证明**仪器测试源码可以编译**，不代表在设备上跑过。
 
 | 功能 | 源码 | 构建 | 自动测试 | 系统/设备验证 |
 | --- | --- | --- | --- | --- |
-| Kotlin + Compose + Room 工程骨架 | ✅ | ✅ **已构建**（assembleDebug） | ✅ 174 用例已执行 | ❌ 未验证 |
+| Kotlin + Compose + Room 工程骨架 | ✅ | ✅ **已构建**（assembleDebug） | ✅ 191 用例已执行 | ❌ 未验证 |
 | 文字 / 录音 / 图片输入 | ✅ | ✅ 已构建 | ✅ 已执行（部分） | ❌ 未验证 |
 | 笔记 / 任务 / 课表 / 追问 / 记忆 | ✅ | ✅ 已构建 | ✅ 已执行（部分） | ❌ 未验证 |
 | 本地通知 / 后台任务 / 定位适配 | ✅ | ✅ 已构建 | ✅ 已执行（部分） | ❌ 未验证 |
@@ -191,12 +217,62 @@
 | 增量同步 / 版本冲突 / 删除标记 | ✅ | ✅ Go 已构建 | ✅ Go 已执行 + 真库验证冲突带服务端内容 | ❌ 未验证 |
 | 客户端变更入队 / 自动重放 | ✅ 本轮接通 8 个写点 | ❌ iOS 未编译 | ❌ 未运行 | ❌ 未验证 |
 | AI 对话 / 拆分 / ASR / 记忆检索适配器 | ✅ | ✅ Go 已构建 | ✅ Go 已执行（fixture） | ❌ 未接真实模型 |
-| 主动候选调度 / 推送适配器 / 设备能力 | ✅ 本轮新增 internal/push + scheduler | ✅ Go 已构建 | ✅ Go 已执行（未配置时报错） | ❌ 未接真实推送通道 |
+| 主动候选调度 / 推送适配器 / 设备能力 | ⚠️ 部分实现：已接生产装配与 Runner，但**没有生产者调用 EnqueueProactive** | ✅ Go 已构建 | ✅ Go 已执行（176 用例 + 真库集成） | ❌ 未接真实推送通道 |
 | 数据导出与删除 | ✅ | ✅ Go 已构建 | ✅ Go 已执行 | ❌ 未验证 |
 
 > 推送适配器**没有真实凭据**：`NewAPNs`/`NewFCM` 在缺少凭据时返回
-> `ErrNotConfigured`，绝不假装成功。「供应商接受请求 ≠ 用户已读」这条语义
-> 由 `Status`（accepted / delivered / failed）区分承载。
+> `ErrNotConfigured`，绝不假装成功。「供应商接受请求 ≠ 设备展示 ≠ 用户已读」
+> 这条语义由 `Status` 承载：APNs / FCM 的 HTTP 2xx 一律映射成 `accepted`；
+> **没有任何通道**能产生 `delivered`（二者的发送接口都不回报设备展示），
+> `read` 则根本没有定义。
+>
+> 上一轮审查确认**尚未实现**、因此不得标成已实现的点（本轮逐条处理，结果见下）：
+> 1. **本地/远程单路由去重**（设计文档 8.3 要求"同一候选只选择一个主要投递路径"）——
+>    Go 调度层没有路径概念，本地通知由 iOS 侧排期，二者靠调用方约定而不是代码保证。
+> 2. **安排时预算预留**——`Decide` 只读入参 `History`，预算在发送成功后由
+>    `accumulateHistory` 累加，且只覆盖单批内存；多设备/并发调度会超发。
+> 3. **令牌失效后取消/清理该设备的投递计划**——`Router` 只能上报
+>    `MarkDeviceInvalid`，没有取消已排定投递的入口。
+> 另外 `Guard` 与 `WithRetry` 在仓库里没有任何生产组装点，其行为只由单元测试覆盖。
+
+#### 本轮对上述三点的处理（逐条说明，不合并成一句"已修复"）
+
+**本轮结论：生产装配点已补齐，但仍缺"生产者"。**
+
+**已接上（源码 + 真实启动入口）**：`cmd/daycued/proactive.go` 新增 `newProactiveRunner`，
+按 `Router → Guard → WithRetry → Scheduler → Runner` 组装；`main.go` 用
+`runCtx, cancelRun := context.WithCancel(...)` 建出与 HTTP 优雅关闭共用的生命周期，
+`go pushRunner.Start(runCtx, pushInterval)` 真的启动了调度循环，退出信号时先 `cancelRun()`。
+`cloudStore == nil` 时返回 `nil` runner 与说明「无数据库，主动推送调度未启动」，明确不启动而不是假装在跑。
+
+**凭据缺失不再静默**：APNs / FCM 缺凭据（或私钥文件读不到）时注册 `push.Unconfigured`，
+并 `slog.Warn` 带 `cause` 与 `missing_env` 变量名清单。环境变量：
+`DAYCUE_APNS_KEY_ID` / `DAYCUE_APNS_TEAM_ID` / `DAYCUE_APNS_BUNDLE_ID` /
+`DAYCUE_APNS_KEY_FILE`（或 `DAYCUE_APNS_KEY_PEM`）/ `DAYCUE_APNS_ENDPOINT`；
+`DAYCUE_FCM_PROJECT_ID` / `DAYCUE_FCM_SERVICE_ACCOUNT_FILE`（或 `_JSON`）/ `DAYCUE_FCM_ENDPOINT`；
+调度用 `DAYCUE_PROACTIVE_INTERVAL`（默认 1m）与 `DAYCUE_PROACTIVE_CLAIM_LIMIT`（默认 50）。
+
+**三点逐条回应**（对应上方 1/2/3）：
+1. **单路由去重**：每用户每轮只挑**一台**设备（令牌非空且 `DeviceID` 最小，确定性、不群发）。
+   平台未配置的设备在适配器层被剔除——否则会挑中未配置平台、拿到 not_configured 而被判永久失败。
+   边界：这解决的是「服务端多设备群发」，**不解决**设计文档 8.3 说的「本地通知与远程推送二选一」——
+   本地排期由客户端决定，服务端无从知晓，二者仍靠调用方约定。
+2. **预算预留**：`ClaimDueProactive` 在单事务内 `SELECT ... FOR UPDATE SKIP LOCKED` 取出到期行并写入
+   `claimed_at`，`ProactiveHistory` 回报 `ClaimedToday`，Runner 再减去自己本轮已认领数，
+   避免把自己的占用算成「已发出」而自抬门槛。新增 `0002_proactive_ledger.sql` 补
+   `claimed_at / device_id / title / body / deep_link / data_json` 与认领用部分索引。
+   **边界**：`claimed_at` 不是租约，没有超时回收——进程认领后崩溃且未释放，该行会一直停在占用态，
+   需人工清理；预留只对共享同一 PostgreSQL 的调度进程有效。
+3. **失效设备取消**：`DeliveryResult.DeviceInvalid()` 触发 `MarkDeviceInvalid` +
+   `CancelPendingForDevice`（把该设备上尚未发出的 pending 行落成 cancelled）+ 当前条 cancelled。
+
+**仍然没有做到的（不得当成已完成）**：
+- **没有任何生产方调用 `EnqueueProactive`**：账本在生产环境会一直是空的。必须等生产者
+  （例如主动消息入队端点或规则引擎）接入后，才会有真实投递。这是本项最大的功能缺口，
+  也就是说「链路已装配、可被调用、测试可验证」，但**还没有真实业务在调用它**。
+- **用户时区统一按 UTC**：`LocationOf` 返回 UTC，跨时区用户的日预算与静默时段会偏移。
+- **推送通道未用真实凭据做过端到端投递验证**：FCM 服务账号 JWT 与 APNs 通道只有单元/编译级验证。
+- 单设备路由意味着多设备用户只有一台设备会收到主动推送（设计取舍，非遗漏）。
 
 
 ## 五、未验证清单（交付时必须如实声明）
@@ -209,10 +285,14 @@
 3. **EventKit 相关行为全部未验证**：提醒的读写、清单归属、完成状态、
    `requestFullAccessToReminders()` 的真实签名与授权流程。
 4. **本地通知、定位、相机、麦克风的实际行为全部未验证**。
-5. ~~**Android 从未编译**~~ —— **本轮已解除**。本机已配好 JDK 17 与 Android SDK
-   （platform 35 / build-tools 35.0.0），`:app:assembleDebug` 与
-   `:app:testDebugUnitTest` 真实执行成功。**仍未验证的是"在真机/模拟器上运行"**，
-   那一项属于第 D 级证据，本机依然做不了。
+5. ~~**Android 从未编译**~~ —— **已解除**。本机已配好 JDK 17 与 Android SDK
+   （platform 35 / build-tools 35.0.0），`:app:assembleDebug`、`:app:testDebugUnitTest`、
+   `:app:assembleDebugAndroidTest` 三项真实执行成功。
+   **仍未验证的是"在真机/模拟器上运行"**，那一项属于第 D 级证据，本机依然做不了。
+   具体地：`androidTest` 源集（含 `MigrationTest`）现在**已确认可以编译**
+   （`:app:compileDebugAndroidTestKotlin` 实际执行、`MigrationTest.class` 已产出、
+   `app-debug-androidTest.apk` 已打包），但**一条仪器测试都没有运行过**——
+   本机没有连接任何设备或模拟器。因此 `MIGRATION_1_2` 的 DDL **从未在真实 SQLite 上执行过**。
 6. ~~**真实 PostgreSQL 读写未验证**~~ —— **本轮已解除**。已引入 pgx/v5 并固定版本，
    用 Docker 起了 `postgres:16-alpine`（`scripts/db-up.ps1`，经 `pg_isready` 验证），
    6 条集成测试**真连库执行并通过**。仍未验证的是并发冲突语义与"迁移能应用于未来版本"。
@@ -328,13 +408,13 @@ go run ./cmd/daycued
 
 ## 九、当前结论
 
-- **后端**：源码完整，本机已构建、已测试（`go test ./...` **159 用例全绿**）。
-  **真实 PostgreSQL 已跑通**（6 条集成测试连库 PASS）。
-  仍未验证：真实模型 / ASR 调用、真实推送通道（无凭据）、并发冲突压测。
+- **后端**：源码完整，本机已构建、已测试（`go test ./...` **176 个顶层用例全绿**）。
+  **真实 PostgreSQL 已跑通**（14 条集成测试连库 PASS，含并发冲突、并发删除、旧库升级、迁移幂等、主动账本幂等入队与并发认领互斥）。
+  仍未验证：真实模型 / ASR 调用、真实推送通道（无凭据）。
 - **iOS**：功能源码已按规划写完，**从未编译、从未运行、从未上真机**。
   本轮只跑过静态检查（通过 17 / 失败 0 / 未验证 4），那**不等于能编译**。
-- **Android**：源码已写完，**本机已真实构建并通过 174 个 JVM 单元测试**，
-  产出 APK。**未在任何真机或模拟器上运行过**。
+- **Android**：源码已写完，**本机已真实构建并通过 197 个 JVM 单元测试**，
+  产出 APK 与 androidTest APK，**197 个 JVM 用例通过**。**未在任何真机或模拟器上运行过**。
 - **设备行为**：EventKit、本地通知、定位、相机、麦克风、Room 迁移在真机上的行为
   **全部未验证** —— 这是本机（Windows，无 macOS、无 Android 设备）根本无法覆盖的部分。
 
@@ -364,7 +444,7 @@ go build -tags postgres ./... # 退出码 0
 go test ./... -count=1
 ```
 
-结果：**159 个测试用例全部通过**（此前为 124），覆盖
+结果：Go 侧 **176 个顶层用例（含子测试 230）全部通过**，覆盖
 `internal/{api,authn,config,e2e,extract,media,proactive,push,store,syncsvc,temporal}`。
 
 本轮新增的两个包：
@@ -384,18 +464,35 @@ go test -tags postgres ./internal/store/... -count=1 -v
 ```
 
 ```
---- PASS: TestIntegrationMigrateIsIdempotent (0.04s)
---- PASS: TestIntegrationUserIsolation (0.08s)
+--- PASS: TestIntegrationMigrateIsIdempotent (0.02s)
+--- PASS: TestIntegrationUserIsolation (0.09s)
 --- PASS: TestIntegrationPushConflictCarriesServerContent (0.05s)
---- PASS: TestIntegrationTombstonePropagates (0.04s)
+--- PASS: TestIntegrationTombstonePropagates (0.05s)
 --- PASS: TestIntegrationPullCursorAdvances (0.05s)
 --- PASS: TestIntegrationDeleteMediaForUserOnly (0.06s)
-ok  github.com/jolaaa999/DayCue/services/api/internal/store  0.521s
+--- PASS: TestIntegrationConcurrentSameVersionPushLosesNoData (0.20s)
+--- PASS: TestIntegrationConcurrentServicePushReportsServerContent (0.14s)
+--- PASS: TestIntegrationConcurrentDeleteAndStaleUpdateNoResurrect (0.22s)
+--- PASS: TestIntegrationMigrationUpgradesOldDatabase (0.66s)
+    --- PASS: TestIntegrationMigrationUpgradesOldDatabase/已应用0个迁移共1个 (0.22s)
+    --- PASS: TestIntegrationMigrationUpgradesOldDatabase/已应用1个迁移共1个 (0.23s)
+--- PASS: TestIntegrationMigrateIsIdempotentInIsolatedSchema (0.19s)
+ok  github.com/jolaaa999/DayCue/services/api/internal/store  1.992s
 ```
 
-**这 6 条是真连上数据库执行的，不是 skip。** 同一条命令先后跑两次都 PASS。
-另已单独验证：移除 `DAYCUE_TEST_DATABASE_URL` 后 6 条全部输出**明确的跳过原因**，
+**这 11 条是真连上数据库执行的，不是 skip。** 同一条命令先后跑两次都 PASS。
+另已单独验证：移除 `DAYCUE_TEST_DATABASE_URL` 后 11 条全部输出**明确的跳过原因**，
 不会静默退回内存存储再宣称持久化成功。
+
+本次新增的 5 条（均已在真实库跑通）：
+
+- `TestIntegrationConcurrentSameVersionPushLosesNoData`：4 个 goroutine 用同一 Version 并发推送共 8 轮，每轮恰好 1 方成功、其余 `ErrConflict`；服务端版本与内容等于胜者，冲突方不得覆盖。
+- `TestIntegrationConcurrentServicePushReportsServerContent`：同一竞态在 syncsvc 层复现，恰好 1 条 accepted，其余 conflict 且每条都带回服务端当前版本与内容。
+- `TestIntegrationConcurrentDeleteAndStaleUpdateNoResurrect`：删除与旧版本更新并发，恰好一方成功；删除成功则最终必须是墓碑，不得被旧更新复活；另有确定性补测覆盖「墓碑已提交后再来旧版本更新」。
+- `TestIntegrationMigrationUpgradesOldDatabase`：在隔离 schema 里构造「只应用了前 N 个迁移」的旧库再跑完整迁移（N=0..迁移总数），断言只应用剩余脚本、版本记录齐全、已有哨兵数据不丢、最终结构与全新建库逐列一致。
+- `TestIntegrationMigrateIsIdempotentInIsolatedSchema`：空 schema 连跑两遍，第二遍不应用任何脚本，版本号与 applied_at 均不被改写，表结构不变。
+
+迁移升级用独立 schema + `search_path` 隔离，跑完 `DROP SCHEMA ... CASCADE`；已核对 `pg_namespace` 中 `it_mig_%` 残留数为 0。
 
 数据库由 `scripts/db-up.ps1` 用 Docker 启动（`postgres:16-alpine`，
 容器 `daycue-postgres`，127.0.0.1:55432），并以 `pg_isready` 验证就绪。
@@ -420,12 +517,14 @@ DayCueCore 没有引入 iOS 专有框架。
 $env:JAVA_HOME='C:\Program Files\Java\jdk-17'
 $env:ANDROID_HOME='D:\android-sdk'
 cd apps/android
-gradlew.bat --no-daemon --console=plain :app:assembleDebug :app:testDebugUnitTest
-# → BUILD SUCCESSFUL in 1m 40s
+gradlew.bat --no-daemon --console=plain :app:assembleDebug :app:testDebugUnitTest :app:assembleDebugAndroidTest
+# → BUILD SUCCESSFUL
 ```
 
-- 产物：`app/build/outputs/apk/debug/app-debug.apk`，**11,793,805 字节**
-- 单元测试：**174 个 JVM 用例全部通过，0 失败 0 错误 0 跳过**（15 个测试类）
+- 产物：`app/build/outputs/apk/debug/app-debug.apk`，**12,219,339 字节**；另有
+  `app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk`，**738,455 字节**
+- 单元测试：**197 个 JVM 用例全部通过，0 失败 0 错误 0 跳过**（18 个测试类）
+- 仪器测试源码：`:app:compileDebugAndroidTestKotlin` 实际执行成功，但**一条都没运行过**（无设备）
 - 工具链：JDK 17、Gradle 8.9（Wrapper 与 `gradle-wrapper.jar` 已入库）、
   AGP 8.7.2、Kotlin 2.0.21、KSP 2.0.21-1.0.28、Room 2.6.1、compileSdk 35 / minSdk 26
 - Room schema 由 KSP 在 `app/schemas/com.daycue.android.data.local.DayCueDatabase/` **真实生成**，
