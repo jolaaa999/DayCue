@@ -69,6 +69,11 @@ class BootCompletedReceiver : BroadcastReceiver() {
         // 课后追问：同样只恢复未来的。设计文档明确「过期不补发」，开机补一条昨晚的追问是打扰而不是帮助。
         rebuildFollowUps(dependencies, scheduler, capability.exactAlarmAllowed, now)
 
+        // 地点规则：重启会让系统里挂着的围栏全部消失（与闹钟一样不跨重启），
+        // 必须重新对账注册，否则用户开机后再也收不到地点提醒，而且没有任何报错。
+        runCatching { dependencies.geoCoordinator.refreshRegistration() }
+            .onFailure { Log.w(NOTIFY_LOG_TAG, "重启后重建地点规则注册失败", it) }
+
         // WorkManager 的周期作业在重启后由它自己恢复，这里再确认一次是幂等的（唯一作业 + KEEP），
         // 同时补一次立即刷新，把停机期间错过的课表变化与追问补算回来。
         DayCueWorkScheduler(context).apply {

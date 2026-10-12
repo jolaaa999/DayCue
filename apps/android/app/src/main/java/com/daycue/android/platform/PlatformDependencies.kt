@@ -7,6 +7,8 @@ import com.daycue.android.DayCueApplication
 import com.daycue.android.data.local.dao.OutboxDao
 import com.daycue.android.data.local.entity.OutboxOperationRecord
 import com.daycue.android.data.repository.FollowUpRepository
+import com.daycue.android.data.repository.GeoProactiveCoordinator
+import com.daycue.android.data.repository.ProactiveReceiptService
 import com.daycue.android.data.repository.ScheduleRepository
 import com.daycue.android.data.repository.SettingsRepository
 import com.daycue.android.data.repository.SyncRepository
@@ -36,6 +38,16 @@ data class PlatformDependencies(
     val taskRepository: TaskRepository,
     val scheduleRepository: ScheduleRepository,
     val followUpRepository: FollowUpRepository,
+    /**
+     * 地点规则链路的编排器。系统围栏广播、停留复查、开机恢复、回前台补偿都通过它落地。
+     *
+     * 与 outboxExecutor 不同，它刻意**不给默认值**：地点链路不依赖任何外部提供方，
+     * App 一旦装上就应该能工作，装配漏掉必须直接编译不过，而不是运行时静默什么都不做，
+     * 让用户以为「规则开着却永远不响」。
+     */
+    val geoCoordinator: GeoProactiveCoordinator,
+    /** 通知交互回执的落库。用户点开 / 划掉主动通知时由 ProactiveReceiptReceiver 调用。 */
+    val receiptService: ProactiveReceiptService,
     /**
      * outbox 操作的实际执行者，来源见 [OutboxExecutionRegistry]。
      *
@@ -91,6 +103,8 @@ fun fromContainer(container: AppContainer): PlatformDependencies = PlatformDepen
     taskRepository = container.taskRepository,
     scheduleRepository = container.scheduleRepository,
     followUpRepository = container.followUpRepository,
+    geoCoordinator = container.geoCoordinator,
+    receiptService = container.receiptService,
     outboxExecutor = OutboxExecutionRegistry.current(),
 )
 

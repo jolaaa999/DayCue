@@ -167,7 +167,13 @@ class SettingsViewModel(private val container: AppContainer) : ViewModel() {
     fun setLocationRulesEnabled(enabled: Boolean) {
         viewModelScope.launch {
             runCatching { container.settingsRepository.setLocationRulesEnabled(enabled) }
-                .onSuccess { refresh() }
+                .onSuccess {
+                    // 总开关变化必须立刻对账注册：关掉时要真的取消围栏，
+                    // 否则「关了还在提醒」会直接摧毁用户对开关的信任。
+                    runCatching { container.geoCoordinator.onRuleChanged() }
+                        .onFailure { error -> _state.update { it.copy(error = "地点规则注册更新失败：" + (error.message ?: "未知原因")) } }
+                    refresh()
+                }
                 .onFailure { it.fail("保存地点规则开关失败") }
         }
     }

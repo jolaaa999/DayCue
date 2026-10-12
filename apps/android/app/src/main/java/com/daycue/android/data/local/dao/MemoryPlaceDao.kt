@@ -67,6 +67,14 @@ interface PlaceDao {
     @Query("SELECT * FROM place WHERE deleted_at IS NULL AND confirmed_by_user = 1 ORDER BY name ASC")
     suspend fun listConfirmed(): List<PlaceRecord>
 
+    /**
+     * 全部地点，含未确认与已软删除的。
+     * 注册对账要用它：只有拿到全集，界面才能对「规则指向的地点被删了 / 还没确认」给出确切原因，
+     * 而不是笼统地显示「这条规则现在不生效」。
+     */
+    @Query("SELECT * FROM place")
+    suspend fun listAll(): List<PlaceRecord>
+
     @Query("UPDATE place SET deleted_at = :deletedAt, updated_at = :deletedAt WHERE id = :id")
     suspend fun softDelete(id: String, deletedAt: Instant)
 }
@@ -122,6 +130,10 @@ interface ProactiveMessageDao {
 
     @Query("SELECT * FROM proactive_message WHERE state = 'pending' AND scheduled_at_utc <= :now ORDER BY scheduled_at_utc ASC")
     suspend fun listDuePending(now: Instant): List<ProactiveMessageRecord>
+
+    /** 某条地点规则还在等待发出的提醒：规则被删除时要把它们一并取消。 */
+    @Query("SELECT * FROM proactive_message WHERE state = 'pending' AND target_ref = :targetRef")
+    suspend fun listPendingForTarget(targetRef: String): List<ProactiveMessageRecord>
 
     /** 预算判定要用：取某一时间点之后的所有投递记录。 */
     @Query("SELECT * FROM proactive_message WHERE delivered_at_utc IS NOT NULL AND delivered_at_utc >= :since ORDER BY delivered_at_utc DESC")

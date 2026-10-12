@@ -10,6 +10,10 @@
     <string name="notify_channel_system_name">同步与权限</string>
     <string name="notify_channel_system_desc">后台同步失败、权限降级等需要用户知道的系统消息</string>
 
+    <!-- 地点提醒单独一个渠道：用户可以在系统设置里单独关掉它，而不影响自己设定的任务提醒 -->
+    <string name="notify_channel_location_name">地点提醒</string>
+    <string name="notify_channel_location_desc">进入或离开你设定过的地点时的提醒</string>
+
     <string name="notify_exact_alarm_degraded">系统未授予精确闹钟权限，提醒可能延迟数分钟；可在系统设置里允许「闹钟和提醒」。</string>
     <string name="notify_location_unavailable">本机没有可用的定位能力，地点规则已禁用。</string>
 </resources>

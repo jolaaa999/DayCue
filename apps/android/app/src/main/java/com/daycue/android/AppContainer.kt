@@ -4,9 +4,11 @@ import android.content.Context
 import com.daycue.android.data.local.DayCueDatabase
 import com.daycue.android.data.repository.CaptureRepository
 import com.daycue.android.data.repository.FollowUpRepository
+import com.daycue.android.data.repository.GeoProactiveCoordinator
 import com.daycue.android.data.repository.MemoryRepository
 import com.daycue.android.data.repository.NoteRepository
 import com.daycue.android.data.repository.PlaceRepository
+import com.daycue.android.data.repository.ProactiveReceiptService
 import com.daycue.android.data.repository.ProactiveRepository
 import com.daycue.android.data.repository.ScheduleRepository
 import com.daycue.android.data.repository.SettingsRepository
@@ -18,7 +20,11 @@ import com.daycue.android.network.DayCueApiClient
 import com.daycue.android.platform.capability.CapabilityReport
 import com.daycue.android.platform.capability.CapabilityProbe
 import com.daycue.android.platform.media.AudioRecorder
+import com.daycue.android.domain.location.LocationRuleSwitch
+import com.daycue.android.platform.location.AndroidLocationEventSource
+import com.daycue.android.platform.location.SharedPrefsGeoRuleSwitchMemory
 import com.daycue.android.platform.media.MediaStore
+import com.daycue.android.platform.notify.AndroidGeoNotifier
 import com.daycue.android.platform.notify.ReminderScheduler
 import com.daycue.android.platform.security.TokenStore
 import com.daycue.android.platform.work.DayCueWorkScheduler
@@ -108,6 +114,38 @@ class AppContainer(context: Context) {
     val mediaStore = MediaStore(appContext)
     val audioRecorder = AudioRecorder(appContext)
     val tokenStore = TokenStore(appContext)
+
+    // ---- 地点规则链路 ----
+
+    /**
+     * 位置事件源走系统 addProximityAlert（AOSP 的 LocationManager），
+     * 因此没有 Google 服务的设备上同样能注册围栏，不需要 GMS 定位依赖。
+     */
+    val locationEventSource = AndroidLocationEventSource(appContext)
+
+    /** 「用户原本想开着哪些规则」的记忆：定位能力恢复时只放回这些，不会一恢复就全开。 */
+    val geoRuleSwitchMemory = SharedPrefsGeoRuleSwitchMemory(appContext)
+
+    val geoNotifier = AndroidGeoNotifier(reminderScheduler)
+
+    /**
+     * 地点事件 -> 新鲜度 -> 规则求值 -> 预算 -> 通知 的完整编排。
+     *
+     * 总开关直接读设置而不是读「规则还是不是 enabled」：位置是敏感能力，
+     * 用户关掉总开关就必须真的什么都不做。
+     */
+    val geoCoordinator = GeoProactiveCoordinator(
+        rules = placeRepository,
+        ledger = proactiveRepository,
+        notifier = geoNotifier,
+        source = locationEventSource,
+        ruleSwitch = LocationRuleSwitch { settingsRepository.locationRulesEnabled() },
+        switchMemory = geoRuleSwitchMemory,
+        timeSource = timeSource,
+    )
+
+    /** 通知交互回执的落库：地点提醒与课后追问共用同一份状态映射，避免两条路径各写一套。 */
+    val receiptService = ProactiveReceiptService(proactiveRepository, timeSource)
 
     // ---- 网络 ----
 

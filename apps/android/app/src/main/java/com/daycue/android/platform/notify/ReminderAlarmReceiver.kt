@@ -25,6 +25,8 @@ class ReminderAlarmReceiver : BroadcastReceiver() {
         val followUp = intent.getBooleanExtra(EXTRA_FOLLOW_UP, false)
         val channelId = intent.getStringExtra(EXTRA_CHANNEL)
             ?: if (followUp) NotificationChannels.FOLLOW_UP else NotificationChannels.REMINDER
+        // 主动提醒会带上幂等键：有了它，通知的点击 / 划掉才能回写到账本里那一行。
+        val dedupeKey = intent.getStringExtra(EXTRA_DEDUPE_KEY)
 
         postNotification(
             context = context.applicationContext,
@@ -32,6 +34,7 @@ class ReminderAlarmReceiver : BroadcastReceiver() {
             notificationId = notificationId(key),
             title = title,
             body = body,
+            dedupeKey = dedupeKey,
         )
     }
 
@@ -44,5 +47,11 @@ class ReminderAlarmReceiver : BroadcastReceiver() {
         const val EXTRA_BODY = "daycue.extra.body"
         const val EXTRA_CHANNEL = "daycue.extra.channel"
         const val EXTRA_FOLLOW_UP = "daycue.extra.follow_up"
+
+        /**
+         * 主动提醒的幂等键。同一个名字贯穿「闹钟 Intent -> 通知 -> 回执 Intent」整条链，
+         * 改名会让点击回执找不到账本行——而且是静默失效，最难排查。
+         */
+        const val EXTRA_DEDUPE_KEY = "daycue.extra.dedupe_key"
     }
 }

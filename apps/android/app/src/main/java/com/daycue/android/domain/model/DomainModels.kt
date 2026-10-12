@@ -314,6 +314,12 @@ enum class ProactiveState(val raw: String, val displayName: String) {
     val blocksNewCandidate: Boolean
         get() = this == PENDING || this == DELIVERED || this == SUPPRESSED
 
+    /**
+     * 终态不允许被迟到的回执反转。
+     * 用户把一条已经取消的提醒点开，不能让它复活成 delivered 再占当天预算。
+     */
+    val isTerminal: Boolean get() = this != PENDING
+
     companion object {
         fun fromRaw(raw: String): ProactiveState = entries.first { it.raw == raw }
     }

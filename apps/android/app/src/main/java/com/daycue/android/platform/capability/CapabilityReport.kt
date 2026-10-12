@@ -7,7 +7,7 @@ import android.net.Uri
 import android.os.Build
 import android.provider.Settings
 import android.util.Log
-import com.daycue.android.data.repository.LocationAvailability
+import com.daycue.android.domain.location.LocationCapability
 import com.daycue.android.domain.reminder.ReminderCapability
 import com.daycue.android.platform.location.LocationCapabilityProbe
 import com.daycue.android.platform.permission.PermissionCenter
@@ -23,7 +23,7 @@ data class CapabilityReport(
     val exactAlarmAllowed: Boolean,
     val recordingAllowed: Boolean,
     val cameraAvailable: Boolean,
-    val location: LocationAvailability,
+    val location: LocationCapability,
 ) {
     /** 直接复用领域层的投递能力判定，避免平台层和领域层各算一套「精确 / 不精确 / 不可用」。 */
     val reminderCapability: ReminderCapability

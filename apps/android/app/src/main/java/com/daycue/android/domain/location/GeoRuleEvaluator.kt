@@ -16,6 +16,8 @@ data class GeoRuleSpec(
     val placeId: String,
     val trigger: PlaceTrigger,
     val title: String,
+    /** 通知正文。geo_rule 表本来就有 body 列，此前只是没映射进领域视图，不是新加的字段。 */
+    val body: String? = null,
     val minDwellSeconds: Int = 0,
     val cooldownSeconds: Int = 3600,
     val activeFromLocal: LocalTime? = null,

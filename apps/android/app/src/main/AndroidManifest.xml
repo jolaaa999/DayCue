@@ -64,6 +64,28 @@
             android:name=".platform.notify.ReminderAlarmReceiver"
             android:exported="false" />
 
+        <!--
+          系统围栏跨越的落地。addProximityAlert 用的是显式 Intent（component 指到本类），
+          所以 exported=false 不影响接收；这里注册的意义是让系统能实例化它。
+          不注册的后果是静默的：围栏照样触发，广播却找不到接收者，用户永远收不到提醒，且没有任何报错。
+        -->
+        <receiver
+            android:name=".platform.location.GeoProximityReceiver"
+            android:exported="false" />
+
+        <!-- 停留规则「已经待够 N 分钟」的到点复查（围栏广播只在跨越时来一次，停留不是系统事件） -->
+        <receiver
+            android:name=".platform.location.GeoDwellRecheckReceiver"
+            android:exported="false" />
+
+        <!--
+          主动通知的点击 / 划掉回执。不回写的话账本会一直停在 pending，
+          继续占着当天的打扰额度，用户会觉得自己被莫名限流。
+        -->
+        <receiver
+            android:name=".platform.notify.ProactiveReceiptReceiver"
+            android:exported="false" />
+
         <!-- 重启后重建闹钟与 WorkManager 周期作业 -->
         <receiver
             android:name=".platform.notify.BootCompletedReceiver"
