@@ -1,0 +1,83 @@
+{
+  "schema_version": "1.0",
+  "capture_id": "cap_fixture_os_pv",
+  "mode": "fixture",
+  "items": [
+    {
+      "item_id": "itm_1",
+      "kind": "note",
+      "title": "操作系统讲到 PV 操作",
+      "detail": "今天操作系统讲了 PV 操作，我还是没理解。",
+      "source_evidence": "今天操作系统讲了 PV 操作，我还是没理解",
+      "date_expression": null,
+      "due": {
+        "kind": "none",
+        "local": null,
+        "utc": null,
+        "timezone": null
+      },
+      "remind": null,
+      "course_hint": "操作系统",
+      "place_hint": null,
+      "ambiguities": [],
+      "confidence": 0.92
+    },
+    {
+      "item_id": "itm_2",
+      "kind": "task",
+      "title": "复习操作系统 PV 操作",
+      "detail": null,
+      "source_evidence": "明晚八点提醒我复习",
+      "date_expression": "明晚八点",
+      "due": {
+        "kind": "datetime",
+        "local": "2026-10-12T20:00:00",
+        "utc": "2026-10-12T12:00:00Z",
+        "timezone": "Asia/Shanghai"
+      },
+      "remind": {
+        "kind": "absolute",
+        "local": "2026-10-12T20:00:00",
+        "utc": "2026-10-12T12:00:00Z",
+        "timezone": "Asia/Shanghai"
+      },
+      "course_hint": "操作系统",
+      "place_hint": null,
+      "ambiguities": [],
+      "confidence": 0.88
+    },
+    {
+      "item_id": "itm_3",
+      "kind": "task",
+      "title": "交实验报告",
+      "detail": null,
+      "source_evidence": "周五之前交实验报告",
+      "date_expression": "周五之前",
+      "due": {
+        "kind": "date",
+        "local": "2026-10-16",
+        "utc": null,
+        "timezone": "Asia/Shanghai"
+      },
+      "remind": null,
+      "course_hint": null,
+      "place_hint": null,
+      "ambiguities": [
+        {
+          "code": "deadline_only",
+          "field": "remind",
+          "message": "「周五之前」表示的是截止日，尚未设置提醒时间。"
+        }
+      ],
+      "confidence": 0.8
+    }
+  ],
+  "warnings": [],
+  "usage": {
+    "provider": "fixture",
+    "model": "fixture-rules-v1",
+    "latency_ms": 0,
+    "prompt_tokens": 0,
+    "completion_tokens": 0
+  }
+}

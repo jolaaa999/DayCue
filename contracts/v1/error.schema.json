@@ -1,0 +1,52 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://daycue.local/contracts/v1/error.schema.json",
+  "title": "ErrorResponse",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "error"
+  ],
+  "properties": {
+    "error": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "code",
+        "message",
+        "retryable",
+        "trace_id"
+      ],
+      "properties": {
+        "code": {
+          "enum": [
+            "invalid_request",
+            "unauthorized",
+            "not_found",
+            "payload_too_large",
+            "unsupported_media_type",
+            "unprocessable",
+            "rate_limited",
+            "upstream_timeout",
+            "upstream_error",
+            "model_output_invalid",
+            "service_unavailable",
+            "internal"
+          ],
+          "description": "HTTP 映射: invalid_request=400, unauthorized=401, not_found=404, payload_too_large=413, unsupported_media_type=415, unprocessable=422, rate_limited=429, upstream_error=502, model_output_invalid=502, service_unavailable=503, upstream_timeout=504, internal=500"
+        },
+        "message": {
+          "type": "string",
+          "maxLength": 500,
+          "description": "面向用户的可读提示，不得包含用户原文或密钥"
+        },
+        "retryable": {
+          "type": "boolean"
+        },
+        "trace_id": {
+          "type": "string"
+        }
+      }
+    }
+  }
+}

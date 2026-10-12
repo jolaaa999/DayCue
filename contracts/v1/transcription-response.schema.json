@@ -1,0 +1,40 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://daycue.local/contracts/v1/transcription-response.schema.json",
+  "title": "TranscriptionResponse",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "text",
+    "mode"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "1.0"
+    },
+    "text": {
+      "type": "string",
+      "maxLength": 20000
+    },
+    "mode": {
+      "enum": [
+        "live",
+        "fixture"
+      ]
+    },
+    "language": {
+      "type": "string"
+    },
+    "duration_ms": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    }
+  }
+}

@@ -1,0 +1,30 @@
+# 凭据：真实 API Key 绝不能进仓库，样例见 services/api/.env.example
+.env
+.env.local
+*.local.env
+
+# Go 构建产物
+services/api/daycued
+services/api/daycued.exe
+*.test
+coverage.out
+
+# iOS / Xcode（工程文件由 XcodeGen 从 project.yml 生成，不入库）
+apps/ios/*.xcodeproj/
+apps/ios/*.xcworkspace/
+apps/ios/build/
+apps/ios/DerivedData/
+apps/ios/.build/
+xcuserdata/
+*.xcuserstate
+*.ipa
+*.dSYM.zip
+
+# 工具运行时留下的临时产物（例如 process.env.TEMP 为空时拼出的 undefined/ 路径）
+undefined/
+**/undefined/
+*.exe
+
+# 系统
+.DS_Store
+Thumbs.db

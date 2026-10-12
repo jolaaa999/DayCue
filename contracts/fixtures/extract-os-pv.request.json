@@ -1,0 +1,14 @@
+{
+  "schema_version": "1.0",
+  "capture_id": "cap_fixture_os_pv",
+  "source": {
+    "type": "asr",
+    "text": "今天操作系统讲了 PV 操作，我还是没理解，明晚八点提醒我复习，周五之前交实验报告。",
+    "language": "zh-Hans"
+  },
+  "recorded_at": "2026-10-11T11:30:00Z",
+  "timezone": "Asia/Shanghai",
+  "client_context": {
+    "has_course_schedule": false
+  }
+}

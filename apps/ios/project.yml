@@ -1,0 +1,51 @@
+# XcodeGen 工程描述。
+# 说明：DayCueCore 只通过 SPM（Package.swift）参与构建，这里不再重复定义一个同名 target，
+# 否则会与 SwiftPM 的 DayCueCore 产生同名模块冲突。在 Xcode 里对 DayCueCore 跑测试请看 README。
+name: DayCue
+options:
+  bundleIdPrefix: com.daycue
+  deploymentTarget:
+    iOS: "17.0"
+  createIntermediateGroups: true
+  groupSortPosition: top
+
+settings:
+  base:
+    SWIFT_VERSION: "5.9"
+    IPHONEOS_DEPLOYMENT_TARGET: "17.0"
+    ENABLE_USER_SCRIPT_SANDBOXING: YES
+    SWIFT_STRICT_CONCURRENCY: minimal
+
+packages:
+  DayCueCore:
+    path: .
+
+targets:
+  DayCue:
+    type: application
+    platform: iOS
+    sources:
+      - path: Sources/DayCueApp
+        # Info.plist 由上面的 info.properties 生成，INFOPLIST_FILE 已经指向它。
+        # 如果再被当成资源拷进 bundle，Xcode 会报 "Multiple commands produce Info.plist"。
+        excludes:
+          - Info.plist
+    dependencies:
+      - package: DayCueCore
+        product: DayCueCore
+    info:
+      path: Sources/DayCueApp/Info.plist
+      properties:
+        CFBundleDisplayName: DayCue
+        CFBundleShortVersionString: "0.1.0"
+        CFBundleVersion: "1"
+        UILaunchScreen: {}
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
+        # 权限文案：每一项都要说明用途，系统在弹窗中原样展示。
+        NSRemindersFullAccessUsageDescription: DayCue 需要读写你的提醒事项，才能把确认后的任务写入你选择的清单并同步完成状态。
+        NSMicrophoneUsageDescription: DayCue 需要使用麦克风录制语音备忘，录音先保存在本机。
+        NSSpeechRecognitionUsageDescription: DayCue 需要语音识别把录音转成文字；识别失败时录音仍然保留，不会丢失。
+        NSCameraUsageDescription: DayCue 需要使用相机拍摄白板、通知截图或作业说明并识别其中的文字。

@@ -1,0 +1,8 @@
+{
+  "error": {
+    "code": "model_output_invalid",
+    "message": "AI 返回的内容无法解析为结构化候选，已保留原始记录，可稍后重试。",
+    "retryable": true,
+    "trace_id": "trace_fixture_0001"
+  }
+}

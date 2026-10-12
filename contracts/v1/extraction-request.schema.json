@@ -1,0 +1,78 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://daycue.local/contracts/v1/extraction-request.schema.json",
+  "title": "ExtractionRequest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "capture_id",
+    "source",
+    "recorded_at",
+    "timezone"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "1.0"
+    },
+    "capture_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64
+    },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "text"
+      ],
+      "properties": {
+        "type": {
+          "enum": [
+            "text",
+            "asr",
+            "ocr"
+          ]
+        },
+        "text": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 8000
+        },
+        "language": {
+          "type": "string",
+          "maxLength": 16
+        }
+      }
+    },
+    "recorded_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "捕获发生时刻，UTC RFC3339"
+    },
+    "timezone": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64,
+      "description": "IANA 时区名，例如 Asia/Shanghai"
+    },
+    "client_context": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "has_course_schedule": {
+          "type": "boolean"
+        },
+        "known_places": {
+          "type": "array",
+          "maxItems": 20,
+          "items": {
+            "type": "string",
+            "maxLength": 64
+          }
+        }
+      }
+    }
+  }
+}
