@@ -169,9 +169,9 @@ Manifest 里没有注册 `GeoProximityReceiver` / `GeoDwellRecheckReceiver` / `P
 | 用户确认地点 / 半径 / 进入离开条件 | ✅ | ✅ Android 已构建 / ❌ iOS 未编译 | ✅ Android 已执行（部分） | ❌ 未验证 |
 | 地点提醒、日程 + 地点组合规则 | ✅ 管理界面入口已存在：地点列表 / 新建 / 编辑 / 删除 + 规则增删改与开关 | ✅ Android 已构建 / ❌ iOS 未编译 | ✅ Android 已执行 | ❌ 未验证 |
 | 保存坐标时记录坐标系 | ✅ Android `place.coordinate_system`（v3 迁移）/ ✅ iOS Schema v3 | ✅ Android 已构建 / ❌ iOS 未编译 | ✅ Android 已执行 | ❌ 未验证 |
-| 规则关联任务 | ✅ Android `geo_rule.linked_task_id`（v3 迁移）/ ❌ iOS 无此入口（**已知不对称**，见 5.2） | ✅ Android 已构建 / ❌ iOS 未编译 | ✅ Android 已执行 | ❌ 未验证 |
+| 规则关联任务 | ✅ Android `geo_rule.linked_task_id`（v3 迁移）+ 界面选择器 / ✅ iOS `geo_rule.linked_task_id`（Schema v4）+ 界面选择器 | ✅ Android 已构建 / ❌ iOS 未编译 | ✅ Android 已执行 | ❌ 未验证 |
 | 界面操作后重挂围栏 / 取消已排通知 | ✅ 保存走 `onRuleChanged`，删规则与删地点走 `onRulesRemoved` | ✅ Android 已构建 / ❌ iOS 未编译 | ✅ Android 已执行 | ❌ 未验证 |
-| 新鲜度 / 去重 / 冷却 / 每日预算 / 静默时段 | ✅ 两侧都有判定 | ✅ Go 已构建 / ✅ Android 已构建 | ✅ Go 已执行 / ✅ Android 191 用例已执行（含 14 条编排用例） | ⚠️ 仅逻辑层 |
+| 新鲜度 / 去重 / 冷却 / 每日预算 / 静默时段 | ✅ 两侧都有判定 | ✅ Go 已构建 / ✅ Android 已构建 | ✅ Go 已执行 / ✅ Android 222 用例已执行（含 14 条编排用例） | ⚠️ 仅逻辑层 |
 | 权限被拒或位置不可用时的降级 | ✅ 不显示为正常运行 | ✅ Android 已构建 / ❌ iOS 未编译 | ✅ Android 已执行（含撤销权限即注销围栏） | ❌ 未验证 |
 | 通知撤销 / 延后 / 过期 | ✅ | ✅ Android 已构建 / ❌ iOS 未编译 | ✅ Android 已执行（删除规则即取消已排通知） | ❌ 未验证 |
 | 不持续记录轨迹、不承诺室内精度 | ✅（设计约束） | — | — | ❌ 未验证 |
@@ -198,7 +198,7 @@ Manifest 里没有注册 `GeoProximityReceiver` / `GeoDwellRecheckReceiver` / `P
 
 | 功能 | 源码 | 构建 | 自动测试 | 系统/设备验证 |
 | --- | --- | --- | --- | --- |
-| Kotlin + Compose + Room 工程骨架 | ✅ | ✅ **已构建**（assembleDebug） | ✅ 191 用例已执行 | ❌ 未验证 |
+| Kotlin + Compose + Room 工程骨架 | ✅ | ✅ **已构建**（assembleDebug） | ✅ 222 用例已执行 | ❌ 未验证 |
 | 文字 / 录音 / 图片输入 | ✅ | ✅ 已构建 | ✅ 已执行（部分） | ❌ 未验证 |
 | 笔记 / 任务 / 课表 / 追问 / 记忆 | ✅ | ✅ 已构建 | ✅ 已执行（部分） | ❌ 未验证 |
 | 本地通知 / 后台任务 / 定位适配 | ✅ | ✅ 已构建 | ✅ 已执行（部分） | ❌ 未验证 |
@@ -307,6 +307,17 @@ Manifest 里没有注册 `GeoProximityReceiver` / `GeoDwellRecheckReceiver` / `P
    按用户时区计算，且 `localDayBounds` 用 `AddDate` 而非加 24 小时，跨夏令时才不会错一小时；
    账本里的绝对时刻一律 UTC。
 
+5. **「结果不明」不再无限悬着**（`DefaultProactiveUnknownGrace` / `DefaultUnknownGrace`，默认 24 小时）：
+   发现过程值得记下来——这条最初被写成「需要人工/对账流程处置」，
+   但读代码后发现比那更糟：结果不明的行**永远不会被再次领取**，所以 `attempt_count`
+   不再增长，「已达重试上限」这个条件对它永远不成立，于是它每一轮回收都被重写一遍
+   却永远停在 `pending`——写放大没有终点，而且「还有多少行没了结」永远答不出来。
+   现在给了有界期限（`RecoverExpiredProactive` 新增 `unknownGrace` 参数）：超期的行落成
+   `expired`，原因记为 `delivery_unknown_unresolved`，与「重试打满」的 `attempts_exhausted`
+   **分开记**，否则排障时分不清该去查供应商还是该去查自己的进程。
+   **给期限不是改主意要补发**：收敛之后仍然领不到——用例同时钉住了这两件事。
+   边界：它保证这些行会**收敛**，不保证能查清真相；真相永远只能靠供应商对账拿回来。
+
 **仍然没有做到的（不得当成已完成）**：
 - **推送通道未用真实凭据做过端到端投递验证**：FCM 服务账号 JWT 与 APNs 通道只有单元/编译级验证。
 - 单设备路由意味着多设备用户只有一台设备会收到主动推送（设计取舍，非遗漏）。
@@ -344,13 +355,15 @@ Manifest 里没有注册 `GeoProximityReceiver` / `GeoDwellRecheckReceiver` / `P
 - **iOS 的地点规则与 Android 不对称**：两端都有地点与规则的管理界面
   （iOS `PlaceListView` / `PlaceEditorView`，Android `ui/place/*`），
   但两处仍未对齐：
-  1. **规则关联任务**：Android v3 迁移给 `geo_rule` 加了 `linked_task_id` 并有界面入口；
-     iOS 的 `geo_rule` 没有这一列，也没有选择器。
-  2. **位置选择方式**：iOS 只能手工输入经纬度（初始为空，不填就拒绝保存，
+  1. **位置选择方式**：iOS 只能手工输入经纬度（初始为空，不填就拒绝保存，
      所以不会伪造坐标）；Android 有 `LocationPicker` 走设备定位。
-  3. **坐标系**：两端都已在保存时记录（Android v3 迁移、iOS Schema v3），
-     但 iOS 目前恒为 WGS-84，因为它的两个入口给的都是 WGS-84；
-     将来接入地图选点（返回 GCJ-02）时必须在赋值处按来源改。
+  2. **坐标系**：两端都已在保存时记录，但 iOS 目前恒为 WGS-84，
+     因为它的两个入口给的都是 WGS-84；将来接入地图选点（返回 GCJ-02）时
+     必须在赋值处按来源改。
+  3. **版本号不同，结构已经对齐**：两端的库现在都有 `place.coordinate_system` 与
+     `geo_rule.linked_task_id` 两列，但 Android 记为 v3、iOS 记为 v4。
+     版本号只是各自的滚动计数，不必对齐——真正要盯的是结构，
+     所以两端各有一套导出 schema / 漂移测试把关。
   这些差异不影响「不会用固定坐标或模拟成功替代用户选择」这条约束——
   两端都不会在用户没给坐标时替它编一个。
 - **离线队列**：服务端已支持「批量推送 + 逐条结算 + 冲突上报」，
@@ -628,7 +641,7 @@ gradlew.bat --no-daemon --console=plain :app:assembleDebug :app:testDebugUnitTes
 **同步接口统一为 `POST /v1/sync/push` + `GET /v1/sync/pull`**，
 设计文档中残留的 `POST /v1/sync` 写法已一并修正。
 
-### 10.5 本轮（地点界面 / 候选生产者 / 领取租约 / 时区）的真实执行结果
+### 10.6 本轮（地点界面 / 候选生产者 / 领取租约 / 时区）的真实执行结果
 
 全部在本机执行过，命令与结果如下。
 
@@ -648,7 +661,7 @@ go test -tags postgres ./internal/... -count=1
 
 # Android
 gradlew.bat --no-daemon --console=plain :app:assembleDebug :app:testDebugUnitTest :app:assembleDebugAndroidTest
-# → BUILD SUCCESSFUL；20 个测试类 / 217 用例 / 0 失败 / 0 错误 / 0 跳过
+# → BUILD SUCCESSFUL；20 个测试类 / 222 用例 / 0 失败 / 0 错误 / 0 跳过
 ```
 
 **独立于 Go 编译验证的一条**：候选生产者的 SQL 与安全转换函数直接在真实 PostgreSQL 上跑过——
@@ -675,6 +688,60 @@ gradlew.bat --no-daemon --console=plain :app:assembleDebug :app:testDebugUnitTes
    两个领取者若都有行则 token 必须不同、token 非空。
 
 这两条都不是「测试写得不好」，第一条是真的会重复打扰用户。
+### 10.7 补齐三项剩余源码缺口后的真实验证
+
+三项都是上一份报告里**如实列出的未完成项**，不是新增产品范围。
+
+```
+# Go：静态检查
+gofmt -l .                       # 无输出
+go build ./... / go vet ./...    # 退出码 0
+go vet  -tags postgres ./...     # 退出码 0
+go test ./... -count=1           # 全 ok
+go test -tags postgres ./internal/... -count=1 -v
+# → 224 顶层 / 283 含子测试 / 0 失败 / 0 跳过（+2 为本次新增用例）
+
+# Android
+gradlew.bat --no-daemon --console=plain :app:assembleDebug :app:testDebugUnitTest :app:assembleDebugAndroidTest
+# → BUILD SUCCESSFUL；20 个测试类 / 222 用例 / 0 失败 / 0 错误 / 0 跳过（+5）
+
+# iOS：本机无 Swift 工具链，只能做静态检查
+powershell -File scripts/ios/static-check.ps1
+# → 通过 17，失败 0，未验证 4
+```
+
+**① 结果不明不再无限悬着。** 新增 `TestIntegrationProactiveUnknownDeliveryConvergesAfterGrace`
+（真实 PostgreSQL）与 `TestProactiveUnknownDeliveryConvergesAfterGrace`（内存实现）。
+两边断言同一组语义：期限内只延长租约；超期落 `expired` 且原因是 `delivery_unknown_unresolved`；
+收敛之后**再回收两次都无事可做**；并且从头到尾**都领不到**（给期限不是改主意要补发）。
+
+改的过程中自己犯了一个错，一并记下：给 `fresh` CTE 加了 `delivery_unknown_at`，
+却忘了它依赖的 `expired` CTE 投影里没有这一列——CTE 的输出列是固定的，
+Postgres 不会穿透到基表，于是真库直接报 `column "delivery_unknown_at" does not exist`。
+**这个错只有真库能抓到**：内存实现里没有 CTE，`go build` 也不会报，
+两条新用例里也正是那条真库用例先红。
+
+**② iOS `geo_rule.linked_task_id`（Schema v4）。** 六处接线（结构体 / init / INSERT /
+UPDATE / 解码下标 / 列清单）+ `PlaceEditorView` 的可选任务选择器 + 规则摘要里显示关联。
+新增 `testGeoRuleLinkedTaskRoundTrip`，同时断言「有关联能读回」「无关联读回 nil」
+「更新能清空且不影响同行其他列」。
+
+顺带修掉一条**从来没有人执行过、因而一直没暴露**的断言：`SQLiteStoreTests` 断言
+`schema_migrations` 等于 `[currentVersion]`，但迁移器是**每个版本各插一行**，实际是 `[1,2,3,4]`。
+本机没有 Swift 工具链，这条要在第一次真正跑测试时才会红。
+
+**③ Android 回前台按需重报设备能力。** `DeviceReportService` 新增 `reportIfStale()`：
+能力快照变了就**立刻**重报（用户刚给了通知权限却仍收不到推送，就是这条缺口的后果），
+没变则按 30 分钟周期刷新服务端的 `last_seen_at`；失败**不记**状态，下一次回前台立刻重试；
+并发重入用 `AtomicBoolean` 挡掉。`DayCueApplication` 用 `registerActivityLifecycleCallbacks`
+接上（不为一个「有人回到前台」的信号引入 `lifecycle-process` 依赖），
+并且让启动与回前台**共用同一个入口**——两条路径各写一套判断迟早会漂移成两种语义。
+新增 5 条单测：未变不发 / 变了立刻发 / 超周期发 / 失败立刻重试 / 连续调用不连发。
+
+**仍未验证**：iOS 依旧**从未编译**（无 macOS / Xcode / Swift 工具链，本轮新增的 iOS 代码
+只有静态自洽）；Android 依旧**从未在真机或模拟器上运行**，
+本轮新增的回前台重报同样**没有在设备上验证过**——`registerActivityLifecycleCallbacks`
+的实际触发时机、以及权限变更后系统是否真的会触发 `onActivityResumed`，都需要设备确认。
 ## 十一、调用方缺口与本轮补齐情况
 
 第十一节此前列出的缺口，本轮**逐条处理**如下。判定标准不变：
