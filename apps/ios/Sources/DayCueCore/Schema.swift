@@ -6,7 +6,7 @@ import Foundation
 /// 一旦用户设备上已经有数据，就必须靠版本号滚动升级，不能靠 IF NOT EXISTS 糊过去。
 public enum DayCueSchema {
 
-    public static let currentVersion = 2
+    public static let currentVersion = 3
 
     public static func migrate(_ database: SQLiteDatabase) throws {
         try database.execute(
@@ -46,10 +46,26 @@ public enum DayCueSchema {
             try database.execute(v1)
         case 2:
             try database.execute(v2)
+        case 3:
+            try database.execute(v3)
         default:
             throw SQLiteError.execFailed(code: 0, message: "未知的迁移版本 \(version)")
         }
     }
+
+    /// v3：给 place 补一列坐标系。
+    ///
+    /// 为什么不并回 v2：已经有设备的库停在 v2，改 v2 对它们不会生效（版本号已记录），
+    /// 于是老设备会缺列、读取时才炸。SQLite 只能新增列，不能改既有列定义，
+    /// 所以只能靠新版本号滚上去。
+    ///
+    /// 默认值给 'wgs84' 是有依据的：这一列存在之前，地点只能由设备定位或手工输入产生，
+    /// 两者给的都是 WGS-84。所以给老数据补这个默认值是**如实回填**，
+    /// 不是拿一个默认值掩盖「我们不知道」。
+    private static let v3 = """
+    ALTER TABLE place ADD COLUMN coordinate_system TEXT NOT NULL DEFAULT 'wgs84';
+    """
+
 
     /// v2：笔记、课表与课程实例、课后追问、地点与主动规则、记忆修订、同步快照、设备。
     ///

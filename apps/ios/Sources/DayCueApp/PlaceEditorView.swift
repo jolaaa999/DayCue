@@ -344,6 +344,10 @@ struct PlaceEditorView: View {
                 updated.latitude = latitude
                 updated.longitude = longitude
                 updated.radiusMeters = radiusMeters
+                // 坐标系在界面上不可选：当前两个入口（CoreLocation 定位、手工输入经纬度）
+                // 给的都是 WGS-84。这里显式写死而不是留着不动，是为了让将来接入
+                // 地图选点（会返回 GCJ-02）的人一眼看到「必须在这里按选点来源赋值」。
+                updated.coordinateSystem = .wgs84
                 updated.confirmedByUser = confirmedByUser
                 try container.store.updatePlace(updated, at: Date())
                 message = confirmedByUser
@@ -357,6 +361,7 @@ struct PlaceEditorView: View {
                     latitude: latitude,
                     longitude: longitude,
                     radiusMeters: radiusMeters,
+                    coordinateSystem: .wgs84,
                     address: trimmedAddress(),
                     confirmedByUser: confirmedByUser,
                     createdAt: now,

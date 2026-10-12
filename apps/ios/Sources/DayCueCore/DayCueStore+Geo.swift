@@ -14,6 +14,26 @@ public enum GeoStoreError: Error, Equatable {
     case geoRuleNotFound(String)
 }
 
+/// 坐标参考系。
+///
+/// 为什么必须把坐标系存下来而不是「反正都是经纬度」：同一个数字在不同参考系下
+/// 指的是不同的物理位置，中国大陆常见的 GCJ-02 与 WGS-84 之间能差几百米——
+/// 足以让 200 米的围栏判反。设备定位给的是 WGS-84，若将来接入地图选点，
+/// 拿到的可能是 GCJ-02，到那时没有这一列就无从判断该不该纠偏。
+/// 现在只落一个值并如实标注，不做任何隐式转换。
+public enum PlaceCoordinateSystem: String, Codable, CaseIterable, Sendable {
+
+    case wgs84 = "wgs84"
+    case gcj02 = "gcj02"
+
+    public var displayName: String {
+        switch self {
+        case .wgs84: return "WGS-84"
+        case .gcj02: return "GCJ-02"
+        }
+    }
+}
+
 /// 用户确认过的地点。radiusMeters 是「大致范围」，不是精确边界。
 public struct PlaceRecord: Codable, Equatable, Sendable, Identifiable {
 
@@ -22,6 +42,8 @@ public struct PlaceRecord: Codable, Equatable, Sendable, Identifiable {
     public var latitude: Double
     public var longitude: Double
     public var radiusMeters: Double
+    /// 经纬度所属的坐标参考系，见 PlaceCoordinateSystem。读取时缺列按 WGS-84 兜底。
+    public var coordinateSystem: PlaceCoordinateSystem
     public var address: String?
     /// 用户是否明确确认过这个地点。未确认的地点不参与规则判定。
     public var confirmedByUser: Bool
@@ -35,6 +57,7 @@ public struct PlaceRecord: Codable, Equatable, Sendable, Identifiable {
         latitude: Double,
         longitude: Double,
         radiusMeters: Double = 200,
+        coordinateSystem: PlaceCoordinateSystem = .wgs84,
         address: String? = nil,
         confirmedByUser: Bool = false,
         createdAt: String,
@@ -46,6 +69,7 @@ public struct PlaceRecord: Codable, Equatable, Sendable, Identifiable {
         self.latitude = latitude
         self.longitude = longitude
         self.radiusMeters = radiusMeters
+        self.coordinateSystem = coordinateSystem
         self.address = address
         self.confirmedByUser = confirmedByUser
         self.createdAt = createdAt
@@ -244,9 +268,9 @@ public extension DayCueStore {
         let statement = try database.prepare(
             """
             INSERT INTO place
-              (id, name, latitude, longitude, radius_meters, address, confirmed_by_user,
-               created_at, updated_at, deleted_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+              (id, name, latitude, longitude, radius_meters, coordinate_system, address,
+               confirmed_by_user, created_at, updated_at, deleted_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
             """
         )
         try statement.bind([
@@ -255,6 +279,7 @@ public extension DayCueStore {
             .real(record.latitude),
             .real(record.longitude),
             .real(record.radiusMeters),
+            .text(record.coordinateSystem),
             .optionalText(record.address),
             .bool(record.confirmedByUser),
             .text(record.createdAt),
@@ -276,14 +301,15 @@ public extension DayCueStore {
         let statement = try database.prepare(
             """
             INSERT INTO place
-              (id, name, latitude, longitude, radius_meters, address, confirmed_by_user,
-               created_at, updated_at, deleted_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+              (id, name, latitude, longitude, radius_meters, coordinate_system, address,
+               confirmed_by_user, created_at, updated_at, deleted_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(id) DO UPDATE SET
               name = excluded.name,
               latitude = excluded.latitude,
               longitude = excluded.longitude,
               radius_meters = excluded.radius_meters,
+              coordinate_system = excluded.coordinate_system,
               address = excluded.address,
               confirmed_by_user = excluded.confirmed_by_user,
               updated_at = excluded.updated_at,
@@ -296,6 +322,7 @@ public extension DayCueStore {
             .real(record.latitude),
             .real(record.longitude),
             .real(record.radiusMeters),
+            .text(record.coordinateSystem),
             .optionalText(record.address),
             .bool(record.confirmedByUser),
             .text(record.createdAt),
@@ -336,7 +363,7 @@ public extension DayCueStore {
         let statement = try database.prepare(
             """
             UPDATE place SET
-              name = ?, latitude = ?, longitude = ?, radius_meters = ?, address = ?,
+              name = ?, latitude = ?, longitude = ?, radius_meters = ?, coordinate_system = ?, address = ?,
               confirmed_by_user = ?, updated_at = ?
             WHERE id = ? AND deleted_at IS NULL;
             """
@@ -346,6 +373,7 @@ public extension DayCueStore {
             .real(record.latitude),
             .real(record.longitude),
             .real(record.radiusMeters),
+            .text(record.coordinateSystem),
             .optionalText(record.address),
             .bool(record.confirmedByUser),
             .text(record.updatedAt),
@@ -615,11 +643,12 @@ public extension DayCueStore {
             latitude: statement.double(2),
             longitude: statement.double(3),
             radiusMeters: statement.double(4),
-            address: statement.string(5),
-            confirmedByUser: statement.bool(6),
-            createdAt: statement.string(7) ?? "",
-            updatedAt: statement.string(8) ?? "",
-            deletedAt: statement.string(9)
+            coordinateSystem: statement.string(5) ?? PlaceCoordinateSystem.wgs84.rawValue,
+            address: statement.string(6),
+            confirmedByUser: statement.bool(7),
+            createdAt: statement.string(8) ?? "",
+            updatedAt: statement.string(9) ?? "",
+            deletedAt: statement.string(10)
         )
     }
 
@@ -683,7 +712,7 @@ public extension DayCueStore {
 
 /// 列顺序集中一处，取值下标才不会随查询改动而错位。
 /// [trigger] 用方括号包住：TRIGGER 是 SQLite 的关键字，直接当列名在某些语句里会被当成语法。
-let placeColumns = "id, name, latitude, longitude, radius_meters, address, confirmed_by_user, created_at, updated_at, deleted_at"
+let placeColumns = "id, name, latitude, longitude, radius_meters, coordinate_system, address, confirmed_by_user, created_at, updated_at, deleted_at"
 
 let geoRuleColumns = "id, place_id, [trigger], title, body, min_dwell_seconds, cooldown_seconds, active_from_local, active_to_local, weekdays, enabled, expires_at_utc, created_at, updated_at, deleted_at"
 
