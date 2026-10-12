@@ -23,7 +23,7 @@ type ledgerFake struct {
 	historyFn    func(ctx context.Context, userID, dedupeKey, kind string, now time.Time, loc *time.Location) (HistoryFacts, error)
 	settleFn     func(ctx context.Context, req SettleRequest) error
 	beginFn      func(ctx context.Context, id, token string, at time.Time) error
-	recoverFn    func(ctx context.Context, now time.Time, limit int, lease time.Duration, maxAttempts int) (RecoverResult, error)
+	recoverFn    func(ctx context.Context, now time.Time, limit int, lease time.Duration, maxAttempts int, unknownGrace time.Duration) (RecoverResult, error)
 	locationFn   func(ctx context.Context, userID string) (*time.Location, error)
 	markDeviceFn func(ctx context.Context, userID, deviceID string, at time.Time) error
 	cancelFn     func(ctx context.Context, userID, deviceID string, at time.Time) (int, error)
@@ -74,9 +74,9 @@ func (f *ledgerFake) SettleProactive(ctx context.Context, req SettleRequest) err
 	return nil
 }
 
-func (f *ledgerFake) RecoverExpiredProactive(ctx context.Context, now time.Time, limit int, lease time.Duration, maxAttempts int) (RecoverResult, error) {
+func (f *ledgerFake) RecoverExpiredProactive(ctx context.Context, now time.Time, limit int, lease time.Duration, maxAttempts int, unknownGrace time.Duration) (RecoverResult, error) {
 	if f.recoverFn != nil {
-		return f.recoverFn(ctx, now, limit, lease, maxAttempts)
+		return f.recoverFn(ctx, now, limit, lease, maxAttempts, unknownGrace)
 	}
 	return RecoverResult{}, nil
 }

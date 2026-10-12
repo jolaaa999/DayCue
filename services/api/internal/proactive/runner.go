@@ -113,7 +113,7 @@ type HistoryFacts struct {
 type ProactiveLedger interface {
 	ClaimDueProactive(ctx context.Context, req ClaimRequest) (ClaimBatch, error)
 	SettleProactive(ctx context.Context, req SettleRequest) error
-	RecoverExpiredProactive(ctx context.Context, now time.Time, limit int, lease time.Duration, maxAttempts int) (RecoverResult, error)
+	RecoverExpiredProactive(ctx context.Context, now time.Time, limit int, lease time.Duration, maxAttempts int, unknownGrace time.Duration) (RecoverResult, error)
 	// BeginProactiveDelivery 必须在真正调用供应商**之前**调用。
 	// 顺序反了的话，崩在发送调用中间的消息会被恢复者当成"还没发过"而重发。
 	BeginProactiveDelivery(ctx context.Context, id string, token string, at time.Time) error
@@ -185,6 +185,11 @@ type Runner struct {
 	Lease time.Duration
 	// MaxAttempts 是单条消息允许被领取的最大次数；<=0 时用 DefaultMaxAttempts。
 	MaxAttempts int
+	// UnknownGrace 是结果不明的解决期限；<=0 时用 DefaultUnknownGrace。
+	//
+	// 必须有界：结果不明的行不会被再次领取，重试上限对它永远不成立，
+	// 没有这个期限它会每一轮回收都被重写却永不收敛。
+	UnknownGrace time.Duration
 	// DailyBudgetFor 返回某用户当日允许发出的条数；为 nil 时按调度策略的 DailyBudget。
 	//
 	// 领取阶段就要按它原子预留额度：只在调度器里判定预算是不够的，
@@ -205,6 +210,9 @@ const (
 	DefaultLease = 15 * time.Minute
 	// DefaultMaxAttempts 是默认最大领取次数：一次正常投递 + 三次重试。
 	DefaultMaxAttempts = 4
+	// DefaultUnknownGrace 是结果不明的解决期限：24 小时后仍不知道发没发出去，
+	// 就落成 expired（原因 delivery_unknown_unresolved）而不是继续延长租约。
+	DefaultUnknownGrace = 24 * time.Hour
 	// DefaultRetryBackoff 是失败重试的最小退避。
 	DefaultRetryBackoff = 30 * time.Second
 	// MaxRetryBackoff 是失败重试的退避上限。
@@ -233,7 +241,7 @@ func (r *Runner) RunOnce(ctx context.Context) (RunReport, error) {
 
 	// 先回收过期租约再领取：上一轮崩溃留下的租约如果能回收，本轮就能接着把它发出去；
 	// 放在领取之后做，那些行要白等一整轮。
-	if rec, err := r.Ledger.RecoverExpiredProactive(ctx, now, r.recoverLimit(), r.lease(), r.maxAttempts()); err != nil {
+	if rec, err := r.Ledger.RecoverExpiredProactive(ctx, now, r.recoverLimit(), r.lease(), r.maxAttempts(), r.unknownGrace()); err != nil {
 		// 回收失败不是"本轮不能调度"：新消息的投递不该被旧租约的清理问题挡住。
 		r.logger().Error("主动推送：回收过期租约失败", "error", err.Error())
 		report.Errors++
@@ -798,6 +806,14 @@ func (r *Runner) maxAttempts() int {
 		return r.MaxAttempts
 	}
 	return DefaultMaxAttempts
+}
+
+// unknownGrace 归一化结果不明的解决期限。
+func (r *Runner) unknownGrace() time.Duration {
+	if r.UnknownGrace > 0 {
+		return r.UnknownGrace
+	}
+	return DefaultUnknownGrace
 }
 
 // recoverLimit 归一化单轮回收上限。

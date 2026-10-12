@@ -316,7 +316,7 @@ func TestIntegrationProactiveStaleExecutorRejected(t *testing.T) {
 
 	// 让租约过期并回收：尚未发起投递，所以应当被放回待领取。
 	later := now.Add(2 * time.Minute)
-	res, err := pg.RecoverExpiredProactive(ctx, later, 10, time.Minute, 4)
+	res, err := pg.RecoverExpiredProactive(ctx, later, 10, time.Minute, 4, time.Hour)
 	if err != nil {
 		t.Fatalf("回收过期租约失败: %v", err)
 	}
@@ -454,7 +454,7 @@ func TestIntegrationProactiveUnknownDeliveryIsNotResent(t *testing.T) {
 	}
 
 	later := now.Add(2 * time.Minute)
-	res, err := pg.RecoverExpiredProactive(ctx, later, 10, time.Minute, 4)
+	res, err := pg.RecoverExpiredProactive(ctx, later, 10, time.Minute, 4, time.Hour)
 	if err != nil {
 		t.Fatalf("回收失败: %v", err)
 	}
@@ -477,6 +477,89 @@ func TestIntegrationProactiveUnknownDeliveryIsNotResent(t *testing.T) {
 	}
 	if status != store.ProactiveDeliveryUnknown {
 		t.Fatalf("行应被标记为结果不明，实际 %s", status)
+	}
+}
+
+// TestIntegrationProactiveUnknownDeliveryConvergesAfterGrace 回归"结果不明也必须收敛"。
+//
+// 守的是一个很隐蔽的死角：结果不明的行不会被再次领取，attempt_count 因此不再增长，
+// "已达重试上限"对它永远不成立。少了期限，它每一轮回收都会被重写一遍却永远停在
+// pending。这条用例同时钉住两件事：必须收敛成终态，且收敛之后**仍然不得重发**。
+func TestIntegrationProactiveUnknownDeliveryConvergesAfterGrace(t *testing.T) {
+	db := openTestDB(t)
+	ensureSchema(t, db)
+	pg := newPostgres(t, db)
+	ctx := context.Background()
+
+	prefix := testIDPrefix(t)
+	user := prefix
+	createTestUser(t, pg, user)
+	registerCleanup(t, db, user)
+	now := time.Now().UTC()
+
+	msg := newProactiveTestMessage(user, prefix+"_p1", prefix+"_k1", now.Add(-time.Minute))
+	if err := pg.EnqueueProactive(ctx, msg); err != nil {
+		t.Fatalf("入队失败: %v", err)
+	}
+	req := claimForTest(now, 5)
+	req.Lease = time.Minute
+	batch, err := pg.ClaimDueProactive(ctx, req)
+	if err != nil || len(batch.Claims) != 1 {
+		t.Fatalf("领取失败: %+v err=%v", batch.Claims, err)
+	}
+	job := batch.Claims[0]
+	if err := pg.BeginProactiveDelivery(ctx, job.ID, job.ClaimToken, now); err != nil {
+		t.Fatalf("登记发起投递失败: %v", err)
+	}
+
+	const grace = time.Hour
+	// 第一次回收：刚变成结果不明，在期限之内 → 只延长租约。
+	first := now.Add(2 * time.Minute)
+	res, err := pg.RecoverExpiredProactive(ctx, first, 10, time.Minute, 4, grace)
+	if err != nil {
+		t.Fatalf("首次回收失败: %v", err)
+	}
+	if res.Extended != 1 || res.Expired != 0 || res.Requeued != 0 {
+		t.Fatalf("期限内的结果不明只能延长租约，实际 %+v", res)
+	}
+
+	// 第二次回收：已超过期限 → 收敛成 expired。原因必须记成"结果不明超期"而不是
+	// "重试打满"，否则排障时分不清该去查供应商还是该去查自己的进程。
+	beyond := first.Add(2 * grace)
+	res, err = pg.RecoverExpiredProactive(ctx, beyond, 10, time.Minute, 4, grace)
+	if err != nil {
+		t.Fatalf("超期回收失败: %v", err)
+	}
+	if res.Expired != 1 || res.Extended != 0 || res.Requeued != 0 {
+		t.Fatalf("超过解决期限的结果不明必须收敛成终态，实际 %+v", res)
+	}
+
+	var state, reason string
+	if err := db.QueryRowContext(ctx,
+		`SELECT state, suppress_reason FROM proactive_message WHERE id = $1`, job.ID).
+		Scan(&state, &reason); err != nil {
+		t.Fatalf("读取终态失败: %v", err)
+	}
+	if state != store.ProactiveStateExpired || reason != "delivery_unknown_unresolved" {
+		t.Fatalf("终态应为 expired/delivery_unknown_unresolved，实际 %s/%s", state, reason)
+	}
+
+	// 收敛之后仍然不得被重新领取：给期限是为了收敛，不是改主意要补发。
+	after, err := pg.ClaimDueProactive(ctx, claimForTest(beyond.Add(time.Second), 5))
+	if err != nil {
+		t.Fatalf("收敛后领取报错: %v", err)
+	}
+	if len(after.Claims) != 0 {
+		t.Fatalf("已收敛的结果不明行不得被重新领取，实际 %+v", after.Claims)
+	}
+
+	// 再回收一次必须无事可做：否则说明它并没有真的收敛。
+	again, err := pg.RecoverExpiredProactive(ctx, beyond.Add(time.Hour), 10, time.Minute, 4, grace)
+	if err != nil {
+		t.Fatalf("再次回收报错: %v", err)
+	}
+	if again.Extended != 0 || again.Expired != 0 || again.Requeued != 0 {
+		t.Fatalf("收敛后应无事可做，实际 %+v", again)
 	}
 }
 
@@ -515,7 +598,7 @@ func TestIntegrationProactiveAttemptCapConvergesToExpired(t *testing.T) {
 		at = at.Add(2 * time.Minute)
 	}
 
-	res, err := pg.RecoverExpiredProactive(ctx, at, 10, time.Minute, cap)
+	res, err := pg.RecoverExpiredProactive(ctx, at, 10, time.Minute, cap, time.Hour)
 	if err != nil {
 		t.Fatalf("回收失败: %v", err)
 	}

@@ -461,7 +461,7 @@ func (m *memProactive) BeginProactiveDelivery(_ context.Context, id string, toke
 	return nil
 }
 
-func (m *memProactive) RecoverExpiredProactive(_ context.Context, now time.Time, limit int, lease time.Duration, maxAttempts int) (ProactiveRecoverResult, error) {
+func (m *memProactive) RecoverExpiredProactive(_ context.Context, now time.Time, limit int, lease time.Duration, maxAttempts int, unknownGrace time.Duration) (ProactiveRecoverResult, error) {
 	if limit <= 0 {
 		return ProactiveRecoverResult{}, nil
 	}
@@ -494,8 +494,22 @@ func (m *memProactive) RecoverExpiredProactive(_ context.Context, now time.Time,
 			row.LeaseExpiresAt = nil
 			row.BudgetReserved = false
 			out.Expired++
+		case row.DeliveryStatus == ProactiveDeliveryUnknown &&
+			row.DeliveryUnknownAt != nil &&
+			!row.DeliveryUnknownAt.Add(claimUnknownGrace(unknownGrace)).After(now):
+			// 结果不明已超过解决期限：收敛成终态，但**仍然不重发**。
+			// 没有这一支，结果不明的行会因为 attempt_count 不再增长而永远卡在 pending，
+			// 每一轮回收都重写一遍却永不收敛。原因与"重试打满"分开记，否则排障时分不清
+			// 该去查供应商还是该去查自己的进程。
+			row.State = ProactiveStateExpired
+			row.SuppressReason = "delivery_unknown_unresolved"
+			row.ClaimToken = ""
+			row.ClaimedBy = ""
+			row.LeaseExpiresAt = nil
+			row.BudgetReserved = false
+			out.Expired++
 		case row.DeliveryStatus == ProactiveDeliveryUnknown:
-			// 结果不明：只延长租约，绝不重新入队。
+			// 结果不明且在解决期限内：只延长租约，绝不重新入队。
 			deadline := now.Add(claimLease(lease))
 			row.LeaseExpiresAt = &deadline
 			out.Extended++
@@ -859,7 +873,7 @@ func TestProactiveStaleExecutorRejectedAfterLeaseRecovery(t *testing.T) {
 
 	// 让租约过期，然后回收它——回收后凭证会变。
 	later := now.Add(2 * time.Minute)
-	result, err := store.RecoverExpiredProactive(ctx, later, 10, time.Minute, 4)
+	result, err := store.RecoverExpiredProactive(ctx, later, 10, time.Minute, 4, time.Hour)
 	if err != nil {
 		t.Fatalf("回收过期租约失败: %v", err)
 	}
@@ -923,7 +937,7 @@ func TestProactiveUnknownDeliveryIsNotResent(t *testing.T) {
 	}
 	// 进程在收到回执前"崩溃"：凭证丢失，租约过期。
 	later := now.Add(2 * time.Minute)
-	result, err := store.RecoverExpiredProactive(ctx, later, 10, time.Minute, 4)
+	result, err := store.RecoverExpiredProactive(ctx, later, 10, time.Minute, 4, time.Hour)
 	if err != nil {
 		t.Fatalf("回收失败: %v", err)
 	}
@@ -938,6 +952,76 @@ func TestProactiveUnknownDeliveryIsNotResent(t *testing.T) {
 	}
 	if len(again.Claims) != 0 {
 		t.Fatalf("结果不明的行不得被重新领取（会重复打扰用户），实际 %+v", again.Claims)
+	}
+}
+
+// TestProactiveUnknownDeliveryConvergesAfterGrace 回归"结果不明也必须收敛"：
+//
+// 这条守的是一个很隐蔽的死角：结果不明的行不会被再次领取，attempt_count 因此
+// 不再增长，"已达重试上限"对它永远不成立。少了期限，它就会每一轮回收都被重写
+// 一遍却永远停在 pending——写放大没有终点，"还有多少行没了结"也永远答不出来。
+// 给期限不是改主意要补发：收敛之后仍然必须领不到。
+func TestProactiveUnknownDeliveryConvergesAfterGrace(t *testing.T) {
+	mem := newMemProactive()
+	var store ProactiveStore = mem
+	ctx := context.Background()
+	now := time.Now()
+	if err := store.EnqueueProactive(ctx, ProactiveMessage{
+		ID: "m1", UserID: "u1", Kind: "geo", DedupeKey: "k1",
+		ScheduledAt: now.Add(-time.Minute),
+	}); err != nil {
+		t.Fatalf("入队失败: %v", err)
+	}
+	got, err := store.ClaimDueProactive(ctx, ProactiveClaimRequest{
+		Now: now, Limit: 5, Lease: time.Minute, MaxAttempts: 4, DailyLimitFor: unlimitedClaims,
+	})
+	if err != nil || len(got.Claims) != 1 {
+		t.Fatalf("领取失败: %+v err=%v", got.Claims, err)
+	}
+	job := got.Claims[0]
+	if err := store.BeginProactiveDelivery(ctx, job.ID, job.ClaimToken, now); err != nil {
+		t.Fatalf("记录发起投递失败: %v", err)
+	}
+	const grace = time.Hour
+	// 第一次回收：刚变成结果不明，在期限之内 → 只延长租约。
+	first := now.Add(2 * time.Minute)
+	res, err := store.RecoverExpiredProactive(ctx, first, 10, time.Minute, 4, grace)
+	if err != nil {
+		t.Fatalf("首次回收失败: %v", err)
+	}
+	if res.Extended != 1 || res.Expired != 0 || res.Requeued != 0 {
+		t.Fatalf("期限内的结果不明只能延长租约，实际 %+v", res)
+	}
+	// 第二次回收：已超过期限 → 收敛成终态，且原因必须能区分开。
+	beyond := first.Add(2 * grace)
+	res, err = store.RecoverExpiredProactive(ctx, beyond, 10, time.Minute, 4, grace)
+	if err != nil {
+		t.Fatalf("超期回收失败: %v", err)
+	}
+	if res.Expired != 1 || res.Extended != 0 || res.Requeued != 0 {
+		t.Fatalf("超过解决期限的结果不明必须收敛成终态，实际 %+v", res)
+	}
+	row := mem.rows[job.ID]
+	if row.State != ProactiveStateExpired || row.SuppressReason != "delivery_unknown_unresolved" {
+		t.Fatalf("终态应为 expired/delivery_unknown_unresolved，实际 %s/%s", row.State, row.SuppressReason)
+	}
+	// 收敛后仍然领不到：给期限是为了收敛，不是改主意要补发。
+	after, err := store.ClaimDueProactive(ctx, ProactiveClaimRequest{
+		Now: beyond.Add(time.Second), Limit: 5, Lease: time.Minute, MaxAttempts: 4, DailyLimitFor: unlimitedClaims,
+	})
+	if err != nil {
+		t.Fatalf("收敛后领取报错: %v", err)
+	}
+	if len(after.Claims) != 0 {
+		t.Fatalf("已收敛的结果不明行不得被重新领取，实际 %+v", after.Claims)
+	}
+	// 再回收一次必须无事可做，否则说明它并没有真的收敛。
+	againRes, err := store.RecoverExpiredProactive(ctx, beyond.Add(time.Hour), 10, time.Minute, 4, grace)
+	if err != nil {
+		t.Fatalf("再次回收报错: %v", err)
+	}
+	if againRes.Extended != 0 || againRes.Expired != 0 || againRes.Requeued != 0 {
+		t.Fatalf("收敛后应无事可做，实际 %+v", againRes)
 	}
 }
 
@@ -969,7 +1053,7 @@ func TestProactiveAttemptCapConvergesToExpired(t *testing.T) {
 		}
 		at = at.Add(2 * time.Minute)
 	}
-	result, err := store.RecoverExpiredProactive(ctx, at, 10, time.Minute, cap)
+	result, err := store.RecoverExpiredProactive(ctx, at, 10, time.Minute, cap, time.Hour)
 	if err != nil {
 		t.Fatalf("回收失败: %v", err)
 	}

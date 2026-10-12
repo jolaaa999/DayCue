@@ -257,8 +257,8 @@ func (a ledgerAdapter) SettleProactive(ctx context.Context, req proactive.Settle
 	})
 }
 
-func (a ledgerAdapter) RecoverExpiredProactive(ctx context.Context, now time.Time, limit int, lease time.Duration, maxAttempts int) (proactive.RecoverResult, error) {
-	res, err := a.pg.RecoverExpiredProactive(ctx, now, limit, lease, maxAttempts)
+func (a ledgerAdapter) RecoverExpiredProactive(ctx context.Context, now time.Time, limit int, lease time.Duration, maxAttempts int, unknownGrace time.Duration) (proactive.RecoverResult, error) {
+	res, err := a.pg.RecoverExpiredProactive(ctx, now, limit, lease, maxAttempts, unknownGrace)
 	if err != nil {
 		return proactive.RecoverResult{}, err
 	}

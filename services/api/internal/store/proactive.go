@@ -212,6 +212,12 @@ const (
 	// 为什么是 4：一次正常投递 + 三次重试足够跨过供应商抖动；再多就说明问题不在抖动，
 	// 继续重试只会反复占用当日额度。超过后落到 expired（明确终态），不再无限重试。
 	DefaultMaxAttempts = 4
+	// DefaultProactiveUnknownGrace 是结果不明的解决期限。
+	//
+	// 超过这个期限仍不知道发没发出去的行会落成 expired（原因记为
+	// delivery_unknown_unresolved），而不是继续无限延长租约。
+	// 它替代不了对账：它只保证这些行会收敛，不保证能查清真相。
+	DefaultProactiveUnknownGrace = 24 * time.Hour
 	// DefaultRetryBackoff 是失败重试的最小退避。
 	DefaultRetryBackoff = 30 * time.Second
 	// MaxRetryBackoff 是失败重试的退避上限。
@@ -324,7 +330,7 @@ type ProactiveStore interface {
 	// RecoverExpiredProactive 回收过期租约：
 	// 尚未发起投递的行放回待领取；已达重试上限的落 expired；
 	// 投递结果不明的只延长租约（宁可暂时不发，也不重复打扰）。
-	RecoverExpiredProactive(ctx context.Context, now time.Time, limit int, lease time.Duration, maxAttempts int) (ProactiveRecoverResult, error)
+	RecoverExpiredProactive(ctx context.Context, now time.Time, limit int, lease time.Duration, maxAttempts int, unknownGrace time.Duration) (ProactiveRecoverResult, error)
 	// RenewProactiveLease 续租（仅限凭证匹配且当前租约未过期）。长时间批量发送时可以中途续，
 	// 但**不允许**复活已经过期的租约：那会让"过期即可回收"的保证失效。
 	RenewProactiveLease(ctx context.Context, id string, token string, now time.Time, lease time.Duration) (time.Time, error)
@@ -463,6 +469,18 @@ func claimMaxAttempts(n int) int {
 		return DefaultMaxAttempts
 	}
 	return n
+}
+
+// claimUnknownGrace 归一化结果不明的解决期限。
+//
+// 期限必须有界且不能为 0：为 0 会让刚标记为结果不明的行立刻被判超期、当场落成终态，
+// 等于取消了先延长租约观察一下这一步。默认 24 小时，足够覆盖进程崩了、
+// 稍后被运维发现这类常见情形，又不会让一行悬着一个自然日以上。
+func claimUnknownGrace(d time.Duration) time.Duration {
+	if d <= 0 {
+		return DefaultProactiveUnknownGrace
+	}
+	return d
 }
 
 // retryBackoff 按已领取次数给出退避时长：30s、1m、2m、4m……封顶 30 分钟。

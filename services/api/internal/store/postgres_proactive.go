@@ -385,7 +385,10 @@ func sqlInList(values []string) string {
 //   - unknown   ：可能已经发出去过 → **只延长租约**，绝不放回队列（放回就等于重发）；
 //   - 其余      ：确定还没发出 → 放回待领取，并回退它占用的预算预留。
 var sqlProactiveRecover = fmt.Sprintf(`WITH expired AS (
-		SELECT id, user_id, attempt_count, delivery_status, budget_win_start, budget_reserved
+		SELECT id, user_id, attempt_count, delivery_status, budget_win_start, budget_reserved,
+		       -- 必须在这里就投影出来：CTE 的输出列是固定的，fresh 里再引用 delivery_unknown_at
+		       -- 不会穿透到基表，少这一列 SQL 会直接报「列不存在」。
+		       delivery_unknown_at
 		FROM proactive_message
 		WHERE state = 'pending'
 		  AND claim_token <> ''
@@ -397,8 +400,14 @@ var sqlProactiveRecover = fmt.Sprintf(`WITH expired AS (
 	),
 	fresh AS (
 		SELECT id, user_id, attempt_count, delivery_status, budget_win_start, budget_reserved,
+		       delivery_unknown_at,
 		       (delivery_status IN (%s)) AS unknown,
-		       (attempt_count >= $4) AS exhausted
+		       (attempt_count >= $4) AS exhausted,
+		       -- 结果不明已经拖过解决期限：不再继续延长租约，落成明确终态。
+		       -- 没有这一条的话，结果不明的行永远不会被再次领取、attempt_count 不再增长，
+		       -- exhausted 永远不为真，于是每一轮回收都把它重写一遍却永远不收敛——
+		       -- 既白烧写放大，又让「哪些行还没了结」永远没有答案。
+		       (delivery_unknown_at IS NOT NULL AND delivery_unknown_at <= $5) AS unknown_stale
 		FROM expired
 	),
 	-- 结果不明：把交付确定性**升级**成 attempted_unknown 并延长租约。
@@ -413,20 +422,24 @@ var sqlProactiveRecover = fmt.Sprintf(`WITH expired AS (
 		    suppress_reason = 'lease_recovered',
 		    updated_at = $1
 		FROM fresh f
-		WHERE m.id = f.id AND f.unknown AND NOT f.exhausted
+		WHERE m.id = f.id AND f.unknown AND NOT f.exhausted AND NOT f.unknown_stale
 		RETURNING m.user_id, m.budget_reserved, m.budget_win_start
 	),
 	expired_out AS (
 		UPDATE proactive_message m
 		SET state = 'expired',
-		    suppress_reason = 'attempts_exhausted',
+		    -- 两种收敛原因必须分开记：重试打满说明「发失败了」，
+		    -- 结果不明超期说明「到现在也不知道发没发出去，但我们不再补发」。
+		    -- 混成一个值会让排障时分不清该去查供应商还是该去查自己的进程。
+		    suppress_reason = CASE WHEN f.exhausted THEN 'attempts_exhausted'
+		                           ELSE 'delivery_unknown_unresolved' END,
 		    claim_token = '',
 		    claimed_by = '',
 		    lease_expires_at = NULL,
 		    budget_reserved = false,
 		    updated_at = $1
 		FROM fresh f
-		WHERE m.id = f.id AND f.exhausted
+		WHERE m.id = f.id AND (f.exhausted OR f.unknown_stale)
 		RETURNING m.user_id
 	),
 	requeued_out AS (
@@ -873,18 +886,26 @@ func (p *Postgres) BeginProactiveDelivery(ctx context.Context, id string, token 
 
 // RecoverExpiredProactive 回收过期租约。
 //
-// 三类处理（见 0003 迁移的边界说明）：
+// 四类处理（见 0003 迁移的边界说明）：
 //   - 未发起投递 → 放回待领取，安全重发，并回退预留额度；
 //   - 已发起投递、结果不明 → 只延长租约，**不重发**（宁可不发也不重复打扰）；
-//   - 已达重试上限 → 落 expired 终态，让"可能失败"收敛成一个明确结论。
-func (p *Postgres) RecoverExpiredProactive(ctx context.Context, now time.Time, limit int, lease time.Duration, maxAttempts int) (ProactiveRecoverResult, error) {
+//   - 已达重试上限 → 落 expired 终态，让"可能失败"收敛成一个明确结论；
+//   - 结果不明且已超过 unknownGrace → 同样落 expired（原因另记），**仍然不重发**。
+//
+// 第四类为什么必须有：结果不明的行永远不会被再次领取，attempt_count 因此不再增长，
+// "已达重试上限"这个条件对它永远不成立。少了期限，它就会每一轮回收都被重写
+// 却永远停在 pending——写放大没有终点，而且"还有多少行没了结"永远答不出来。
+// 给期限不是改主意要补发，而是承认"我们到死也不会知道发没发出去"，
+// 并把这件事写成一个可以查询的终态。
+func (p *Postgres) RecoverExpiredProactive(ctx context.Context, now time.Time, limit int, lease time.Duration, maxAttempts int, unknownGrace time.Duration) (ProactiveRecoverResult, error) {
 	if limit <= 0 {
 		return ProactiveRecoverResult{}, nil
 	}
 	at := now.UTC()
 	var out ProactiveRecoverResult
 	if err := p.db.QueryRowContext(ctx, sqlProactiveRecover,
-		at, limit, at.Add(claimLease(lease)), claimMaxAttempts(maxAttempts)).
+		at, limit, at.Add(claimLease(lease)), claimMaxAttempts(maxAttempts),
+		at.Add(-claimUnknownGrace(unknownGrace))).
 		Scan(&out.Requeued, &out.Expired, &out.Extended); err != nil {
 		return ProactiveRecoverResult{}, fmt.Errorf("store: 回收过期租约失败: %w", err)
 	}
