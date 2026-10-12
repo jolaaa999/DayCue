@@ -167,7 +167,10 @@ Manifest 里没有注册 `GeoProximityReceiver` / `GeoDwellRecheckReceiver` / `P
 | 功能 | 源码 | 构建 | 自动测试 | 系统/设备验证 |
 | --- | --- | --- | --- | --- |
 | 用户确认地点 / 半径 / 进入离开条件 | ✅ | ✅ Android 已构建 / ❌ iOS 未编译 | ✅ Android 已执行（部分） | ❌ 未验证 |
-| 地点提醒、日程 + 地点组合规则 | ⚠️ 部分实现：规则可增删改的**界面入口不存在** | ✅ Android 已构建 | ✅ Android 已执行（领域层） | ❌ 未验证 |
+| 地点提醒、日程 + 地点组合规则 | ✅ 管理界面入口已存在：地点列表 / 新建 / 编辑 / 删除 + 规则增删改与开关 | ✅ Android 已构建 / ❌ iOS 未编译 | ✅ Android 已执行 | ❌ 未验证 |
+| 保存坐标时记录坐标系 | ✅ Android `place.coordinate_system`（v3 迁移）/ ✅ iOS Schema v3 | ✅ Android 已构建 / ❌ iOS 未编译 | ✅ Android 已执行 | ❌ 未验证 |
+| 规则关联任务 | ✅ Android `geo_rule.linked_task_id`（v3 迁移）/ ❌ iOS 无此入口（**已知不对称**，见 5.2） | ✅ Android 已构建 / ❌ iOS 未编译 | ✅ Android 已执行 | ❌ 未验证 |
+| 界面操作后重挂围栏 / 取消已排通知 | ✅ 保存走 `onRuleChanged`，删规则与删地点走 `onRulesRemoved` | ✅ Android 已构建 / ❌ iOS 未编译 | ✅ Android 已执行 | ❌ 未验证 |
 | 新鲜度 / 去重 / 冷却 / 每日预算 / 静默时段 | ✅ 两侧都有判定 | ✅ Go 已构建 / ✅ Android 已构建 | ✅ Go 已执行 / ✅ Android 191 用例已执行（含 14 条编排用例） | ⚠️ 仅逻辑层 |
 | 权限被拒或位置不可用时的降级 | ✅ 不显示为正常运行 | ✅ Android 已构建 / ❌ iOS 未编译 | ✅ Android 已执行（含撤销权限即注销围栏） | ❌ 未验证 |
 | 通知撤销 / 延后 / 过期 | ✅ | ✅ Android 已构建 / ❌ iOS 未编译 | ✅ Android 已执行（删除规则即取消已排通知） | ❌ 未验证 |
@@ -255,24 +258,61 @@ Manifest 里没有注册 `GeoProximityReceiver` / `GeoDwellRecheckReceiver` / `P
 **三点逐条回应**（对应上方 1/2/3）：
 1. **单路由去重**：每用户每轮只挑**一台**设备（令牌非空且 `DeviceID` 最小，确定性、不群发）。
    平台未配置的设备在适配器层被剔除——否则会挑中未配置平台、拿到 not_configured 而被判永久失败。
-   边界：这解决的是「服务端多设备群发」，**不解决**设计文档 8.3 说的「本地通知与远程推送二选一」——
-   本地排期由客户端决定，服务端无从知晓，二者仍靠调用方约定。
-2. **预算预留**：`ClaimDueProactive` 在单事务内 `SELECT ... FOR UPDATE SKIP LOCKED` 取出到期行并写入
-   `claimed_at`，`ProactiveHistory` 回报 `ClaimedToday`，Runner 再减去自己本轮已认领数，
-   避免把自己的占用算成「已发出」而自抬门槛。新增 `0002_proactive_ledger.sql` 补
-   `claimed_at / device_id / title / body / deep_link / data_json` 与认领用部分索引。
-   **边界**：`claimed_at` 不是租约，没有超时回收——进程认领后崩溃且未释放，该行会一直停在占用态，
-   需人工清理；预留只对共享同一 PostgreSQL 的调度进程有效。
+   边界：这解决的是「服务端多设备群发」。设计文档 8.3 说的「本地通知与远程推送二选一」
+   已由候选生产者的执行方判定承担（见下方「本轮补齐」第 2 条）：
+   客户端声称能本地投递时服务端让路，同一追问不会两边同时安排。
+2. **预算预留与租约**：见下方「本轮补齐」第 3 条——`0003` 把 `claimed_at` 升级为完整租约，
+   并新增按用户时间窗口的预留表 `proactive_budget_window`，正面修掉了「`SKIP LOCKED` 不等于
+   按用户限额的原子预留」这个洞。
+   **边界**：预留与租约只对共享同一 PostgreSQL 的调度进程有效；**不承诺**跨数据库或跨推送供应商的
+   精确一次投递，只承诺稳定 `delivery_id` + 客户端去重 + 明确的「结果不明」态。
 3. **失效设备取消**：`DeliveryResult.DeviceInvalid()` 触发 `MarkDeviceInvalid` +
    `CancelPendingForDevice`（把该设备上尚未发出的 pending 行落成 cancelled）+ 当前条 cancelled。
 
+**本轮补齐（生产方已接入、租约与预算已重做、时区已打通）**：
+
+1. **生产方已接入**（`internal/proactive/producer.go` + `internal/store/proactive_events.go`）：
+   `Producer` 从客户端同步上来的业务事件里取到期项，按去重键幂等写入账本，
+   已由 `cmd/daycued` 在 `main.go` 里用 `go pushProducer.Start(runCtx, pushInterval)` 启动。
+   真实来源只有两类，且都有实测证据：
+   - `task` 且载荷里的 `remind_utc` 到点、`status = 'open'`（两端客户端都同步 task）；
+   - `memory` 且 `review_at` 到点、`status = 'candidate'`（**只有 iOS 端同步 memory**，
+     所以纯 Android 账号查不到这类事件——这是同步范围的现状，不是缺陷）。
+   **刻意不生产 `geo` 与 `follow_up`**：位置证据只在设备本地产生，服务端收不到坐标与围栏事件，
+   凭「用户有地点规则」推不出「他现在到了」；课后追问根本不在同步范围内
+   （两端都不推 `follow_up` / `course_instance`），为它生成候选会与客户端已排好的本地通知打架。
+2. **执行方判定**（`cmd/daycued/proactive_producer.go` 的 `deviceRouteOwner`）：
+   只要该用户**有任何一台**设备上报了 `notifications = true`，就认定客户端会自己本地投递，
+   服务端让路；只有当所有设备都没上报该能力时服务端才接管。
+   这条规则有真实依据：iOS 在能力未知时**如实省略**（`DeviceCapabilities.unknown.wire` 为空），
+   所以「没有任何设备声称能投递」是会真实出现的状态，此时服务端不接管等于这条提醒没人发。
+   边界：它**看不到客户端排上了但没响**（权限中途被关、进程被杀），这一类只能靠客户端下次启动自愈；
+   宁可漏发也不重发——漏发是少打扰一次，重发是用户明确禁止的重复打扰。
+3. **领取租约与预算预留已重做**（`0003_proactive_claim_protocol.sql`）：
+   `claimed_at` 升级为完整租约（`claimed_by` / `claim_token` / `lease_expires_at` / `attempt_count` /
+   `delivery_id` / `delivery_status` / `delivery_unknown_at`）。
+   预算不再靠「数 `claimed_at`」：新增 `proactive_budget_window(user_id, win_start, win_end, reserved, delivered)`，
+   领取时在同一事务里**先锁该用户的窗口行**（`FOR UPDATE`）再跳过别人正在领的消息行
+   （`FOR UPDATE SKIP LOCKED`），于是同一用户的限额判定被串行化。
+   这正面回答了「`FOR UPDATE SKIP LOCKED` + `claimed_at` 是否保证不超预算」：**不保证**——
+   它只保证同一条消息不被两个 runner 领走；两个 runner 各自领走**同一用户的不同消息**时，
+   各自看到的「今日已发」都还没超，用户就会被超发。窗口行上的串行化才是缺的那一环。
+   释放/结算按行上存的 `budget_win_start` 精确回退预留，**绝不按当前时刻现算窗口**，
+   否则用户改一次时区就能让「今天」重开、当日额度被重置。
+4. **用户时区已打通**（`app_user.timezone` + `X-DayCue-Timezone`）：两个客户端本来就在每个请求上
+   带这个头，而服务端此前完全忽略它。现在由 `account.go` 的鉴权中间件顺手对齐——
+   用户行**已经**被读出来了，不需要为它多查一次库；只在值**不同**时写库，空值忽略
+   （空串在存储层有确定语义，不能因为一个漏发头的客户端就把用户时区抹成「未知」），
+   非法值只记 WARN、不失败请求。预算窗口、静默时段、每日重置都经 `UserLocation` → `localDayBounds`
+   按用户时区计算，且 `localDayBounds` 用 `AddDate` 而非加 24 小时，跨夏令时才不会错一小时；
+   账本里的绝对时刻一律 UTC。
+
 **仍然没有做到的（不得当成已完成）**：
-- **没有任何生产方调用 `EnqueueProactive`**：账本在生产环境会一直是空的。必须等生产者
-  （例如主动消息入队端点或规则引擎）接入后，才会有真实投递。这是本项最大的功能缺口，
-  也就是说「链路已装配、可被调用、测试可验证」，但**还没有真实业务在调用它**。
-- **用户时区统一按 UTC**：`LocationOf` 返回 UTC，跨时区用户的日预算与静默时段会偏移。
 - **推送通道未用真实凭据做过端到端投递验证**：FCM 服务账号 JWT 与 APNs 通道只有单元/编译级验证。
 - 单设备路由意味着多设备用户只有一台设备会收到主动推送（设计取舍，非遗漏）。
+- 默认行为下**账本接近于空**：因为客户端本来就该自己本地投递，执行方判定会让路。
+  这是「不要为了填满账本制造无意义消息」的直接结果，不是链路没通——
+  链路已由真实 PostgreSQL 集成测试与单元测试覆盖。
 
 
 ## 五、未验证清单（交付时必须如实声明）
@@ -301,6 +341,18 @@ Manifest 里没有注册 `GeoProximityReceiver` / `GeoDwellRecheckReceiver` / `P
 
 ### 5.2 部分实现，需在 Mac 上补齐
 
+- **iOS 的地点规则与 Android 不对称**：两端都有地点与规则的管理界面
+  （iOS `PlaceListView` / `PlaceEditorView`，Android `ui/place/*`），
+  但两处仍未对齐：
+  1. **规则关联任务**：Android v3 迁移给 `geo_rule` 加了 `linked_task_id` 并有界面入口；
+     iOS 的 `geo_rule` 没有这一列，也没有选择器。
+  2. **位置选择方式**：iOS 只能手工输入经纬度（初始为空，不填就拒绝保存，
+     所以不会伪造坐标）；Android 有 `LocationPicker` 走设备定位。
+  3. **坐标系**：两端都已在保存时记录（Android v3 迁移、iOS Schema v3），
+     但 iOS 目前恒为 WGS-84，因为它的两个入口给的都是 WGS-84；
+     将来接入地图选点（返回 GCJ-02）时必须在赋值处按来源改。
+  这些差异不影响「不会用固定坐标或模拟成功替代用户选择」这条约束——
+  两端都不会在用户没给坐标时替它编一个。
 - **离线队列**：服务端已支持「批量推送 + 逐条结算 + 冲突上报」，
   客户端本地已具备 outbox 表与重放逻辑（第一阶段既有）。
   但「断网时入队、恢复后自动重放」的端到端行为**未在设备上验证**。
@@ -444,7 +496,7 @@ go build -tags postgres ./... # 退出码 0
 go test ./... -count=1
 ```
 
-结果：Go 侧 **176 个顶层用例（含子测试 230）全部通过**，覆盖
+结果：Go 侧 **204 个顶层用例（含子测试 258）全部通过**（`-tags postgres` 下为 222 / 281），覆盖
 `internal/{api,authn,config,e2e,extract,media,proactive,push,store,syncsvc,temporal}`。
 
 本轮新增的两个包：
@@ -522,8 +574,10 @@ gradlew.bat --no-daemon --console=plain :app:assembleDebug :app:testDebugUnitTes
 ```
 
 - 产物：`app/build/outputs/apk/debug/app-debug.apk`，**12,219,339 字节**；另有
-  `app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk`，**738,455 字节**
-- 单元测试：**197 个 JVM 用例全部通过，0 失败 0 错误 0 跳过**（18 个测试类）
+  `app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk`，**748,899 字节**
+- 单元测试：**217 个 JVM 用例全部通过，0 失败 0 错误 0 跳过**（20 个测试类）
+- **APK 内容已逐条核对**：解压 dex 后确认 `ui/place/{PlaceListScreen,PlaceEditScreen,RuleEditScreen,PlaceViewModel}`
+  与 `CoordinateSystem` 都在包里。只看字节数不足以证明产物是最新的代码，所以这里查的是包里的类。
 - 仪器测试源码：`:app:compileDebugAndroidTestKotlin` 实际执行成功，但**一条都没运行过**（无设备）
 - 工具链：JDK 17、Gradle 8.9（Wrapper 与 `gradle-wrapper.jar` 已入库）、
   AGP 8.7.2、Kotlin 2.0.21、KSP 2.0.21-1.0.28、Room 2.6.1、compileSdk 35 / minSdk 26
@@ -574,6 +628,53 @@ gradlew.bat --no-daemon --console=plain :app:assembleDebug :app:testDebugUnitTes
 **同步接口统一为 `POST /v1/sync/push` + `GET /v1/sync/pull`**，
 设计文档中残留的 `POST /v1/sync` 写法已一并修正。
 
+### 10.5 本轮（地点界面 / 候选生产者 / 领取租约 / 时区）的真实执行结果
+
+全部在本机执行过，命令与结果如下。
+
+```
+# Go：静态检查全绿
+gofmt -l .                      # 无输出
+go build ./...                  # 退出码 0
+go vet ./...                    # 退出码 0
+go build -tags postgres ./...   # 退出码 0
+go vet  -tags postgres ./...    # 退出码 0
+go test ./... -count=1          # 204 顶层 / 258 含子测试 / 0 失败 / 0 跳过
+
+# 真实 PostgreSQL（容器 daycue-postgres 未重建、数据未清理）
+$env:DAYCUE_TEST_DATABASE_URL='postgres://daycue:daycue@127.0.0.1:55432/daycue_test?sslmode=disable'
+go test -tags postgres ./internal/... -count=1
+# → 全部 ok；222 顶层 / 281 含子测试 / 0 失败 / 0 跳过
+
+# Android
+gradlew.bat --no-daemon --console=plain :app:assembleDebug :app:testDebugUnitTest :app:assembleDebugAndroidTest
+# → BUILD SUCCESSFUL；20 个测试类 / 217 用例 / 0 失败 / 0 错误 / 0 跳过
+```
+
+**独立于 Go 编译验证的一条**：候选生产者的 SQL 与安全转换函数直接在真实 PostgreSQL 上跑过——
+6 种畸形时间文本（「昨天下午」「2026-13-45T99:99:99Z」、空串、纯空格、非日期、只有日期）
+全部返回 NULL 且**不抛错**，合法输入正常解析，生产者查询本体可执行。
+这条必须单独验，因为它的失败模式是「一条坏数据打垮全量提醒」，
+而不是某条用例红掉。
+
+**送达前被实测抓到、随后修掉的两个真缺陷**（记录在此，避免以后重犯）：
+
+1. **「已发起投递但结果不明」被当成「从未发起」而重新入队**：
+   `BeginProactiveDelivery` 写的是 `delivery_status = 'sending'`，而回收逻辑的
+   `unknown` 判定只认 `'attempted_unknown'`，于是崩溃在供应商调用中间的行会落进
+   「放回待领取」分支，被重新领取并**再次发送**——正是「可能已被供应商接受时不得盲目重发」
+   明令禁止的情形，也是「宁可不发也不重复打扰」那条。
+   真实库上的原始现象：`TestIntegrationProactiveUnknownDeliveryIsNotResent` 报
+   `结果不明的行只能延长租约，实际 {Requeued:1 Expired:0 Extended:0}`。
+   修法：`unknown` 改为按一个明确的不确定集合判定，并把状态**升级**为 `attempted_unknown`、
+   同时记 `delivery_unknown_at`，让「哪些行需要对账」可查询。
+2. **并发领取用例的凭证断言与设计不符**：断言「每条 claim 的 `ClaimToken` 互不相同」，
+   而 `claimOnce` 是**每轮领取一个 token、批内所有行共用**。
+   于是任何领取者只要拿到 ≥2 条消息，该断言就恒失败（不是并发偶发）。
+   修法是让断言对齐真正的不变量：同一条消息不得被两个领取者同时拿到、
+   两个领取者若都有行则 token 必须不同、token 非空。
+
+这两条都不是「测试写得不好」，第一条是真的会重复打扰用户。
 ## 十一、调用方缺口与本轮补齐情况
 
 第十一节此前列出的缺口，本轮**逐条处理**如下。判定标准不变：
