@@ -96,7 +96,14 @@ CREATE TABLE IF NOT EXISTS memory_index (
 );
 CREATE INDEX IF NOT EXISTS idx_memory_index_token ON memory_index(user_id, token);
 
--- 主动消息账本：预算/冷却/去重都落库，避免多设备各自计数导致超发。
+-- 主动消息账本：跨进程共享预算/冷却/去重的持久账本（Go 侧经 store.ProactiveStore 读写）。
+-- 预算预留由 store.ClaimDueProactive 在单个事务里完成：SELECT ... FOR UPDATE SKIP LOCKED
+-- 取出到期行后写入 claimed_at，认领期间该行按 claimed_at 计入当日占用；
+-- 因此共享同一个 PostgreSQL 的多个调度进程不会重复发送同一条消息，
+-- 也不会各自把当日额度算成还有余量。
+-- 边界：预留不是租约，没有超时回收——进程若在认领后崩溃且未释放，该行会一直停在
+-- claimed_at 非空状态，需要人工清理或将来实现租约回收；它只解决「共享同一数据库的
+-- 调度进程之间」的重复发送，不解决崩溃恢复。
 CREATE TABLE IF NOT EXISTS proactive_message (
   id               TEXT PRIMARY KEY,
   user_id          TEXT NOT NULL REFERENCES app_user(id) ON DELETE CASCADE,

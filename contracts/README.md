@@ -22,11 +22,29 @@
 | `v1/media-response.schema.json` | `POST /v1/media` 响应体（不下发 storage_key） |
 | `v1/export-response.schema.json` | `GET /v1/export` 响应体（含墓碑） |
 | `v1/account-delete-response.schema.json` | `DELETE /v1/account` 的 204 语义登记（无响应体） |
-| `v1/proactive-candidate.schema.json` | 主动消息候选（预留，暂无 HTTP 端点） |
-| `v1/proactive-delivery.schema.json` | 主动消息投递状态与回执（预留，暂无 HTTP 端点） |
+| `v1/proactive-candidate.schema.json` | **服务端内部模型**（不是客户端 API，无 HTTP 端点） |
+| `v1/proactive-delivery.schema.json` | **服务端内部模型**（不是客户端 API，无 HTTP 端点） |
 | `fixtures/extract-os-pv.request.json` | 设计文档 5.1 的语音样例请求 |
 | `fixtures/extract-os-pv.response.json` | 同一输入期望的候选结果（1 笔记 + 2 任务） |
 | `fixtures/error.model_output_invalid.json` | 模型返回非法 JSON 时的错误样例 |
+
+## 服务端内部模型（不是客户端 API）
+
+下面这些 schema **刻意没有 HTTP 端点**，它们只固定服务端内部类型的字段名：
+
+| 文件 | 为什么没有端点 |
+| --- | --- |
+| `v1/proactive-candidate.schema.json` | 候选由服务端调度器产生并消费，客户端从不请求它。为「只有服务端自己调用」的模型造 REST 端点只会增加攻击面。 |
+| `v1/proactive-delivery.schema.json` | 投递状态由服务端在推送后自己记账，客户端不上报。 |
+
+**判定口径**：一个 schema 是否该有端点，取决于**客户端是否真的需要调用它**，
+而不是「契约目录里有没有这个文件」。需要客户端调用的（账号、设备、同步 push/pull、
+媒体、导出、账号删除）都有真实端点与认证；只有服务端用的明确标为内部模型。
+
+> 关于「已读」：`proactive-delivery` 刻意**没有** `read` 状态。
+> 即便将来某条通道回报 `delivered`，那也只能证明消息到达设备，不能证明设备展示了它，
+> 更不能证明用户读过。当前实现的 APNs / FCM 发送接口都只回报"已受理"，
+> 因此 `delivered` 在现有实现里不可达。没有可信的设备或用户回执时，不得标记 `delivered` 或 `read`。
 
 ## 关键约定
 

@@ -89,9 +89,26 @@ const (
 	// StatusAccepted 表示供应商已受理请求。这不等于设备收到，更不等于用户看到。
 	StatusAccepted Status = "accepted"
 	// StatusDelivered 表示供应商回报设备侧已确认送达。只有供应商明确给出这个信号才能用。
+	//
+	// 注意：现有两条通道（APNs / FCM）的发送接口都**只回报受理**，不回报设备展示，
+	// 所以这个状态在现有实现里不可达；保留它是为了将来真有设备级送达回执时不必改契约。
+	// 任何把 HTTP 2xx 写成 delivered 的做法都是虚报，必须写成 accepted。
 	StatusDelivered Status = "delivered"
 	StatusFailed    Status = "failed"
 )
+
+// Known 判断这是不是本包定义的投递状态。
+//
+// 调度层据回执记账时必须先过这一关：把空串或未知状态当成 accepted，
+// 等于凭空宣称"已提交给推送服务"，而实际上什么都没发生。
+func (s Status) Known() bool {
+	switch s {
+	case StatusAccepted, StatusDelivered, StatusFailed:
+		return true
+	default:
+		return false
+	}
+}
 
 // FailureKind 是一次投递失败的原因分类。
 type FailureKind string

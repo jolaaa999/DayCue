@@ -171,13 +171,34 @@ func (s *Scheduler) Deliver(ctx context.Context, target push.DeviceTarget, item 
 		return res, nil
 	}
 
+	// 回执状态必须逐项显式映射，不能用一个 default 兜成 accepted：
+	// 空串或未知状态会因此被当成"已提交给推送服务"，而实际什么都没发生。
 	switch receipt.Status {
-	case push.StatusDelivered:
-		res.Outcome = OutcomeDelivered
-	default:
-		// 供应商只回报"受理"时就是 accepted：不把它抬成 delivered，
-		// 否则界面会显示"已送达"，而用户手机可能根本没亮过屏。
+	case push.StatusAccepted:
 		res.Outcome = OutcomeAccepted
+	case push.StatusDelivered:
+		// 只有供应商明确回报设备级送达才允许标 delivered；
+		// 现有 APNs / FCM 的发送接口都不会给出这个信号，所以这条分支在真实通道上不可达。
+		res.Outcome = OutcomeDelivered
+	case push.StatusFailed:
+		// 回执自称失败但没带 error：如实归为失败，不能因为"没报错"就当成已发出。
+		if res.Failure == nil {
+			res.Failure = receipt.Failure
+		}
+		if res.Failure == nil {
+			res.Failure = &push.Failure{
+				Kind: push.FailurePermanent, Provider: receipt.Provider,
+				Detail: "回执状态为 failed，但没有失败详情",
+			}
+		}
+		res.Outcome = OutcomeFailed
+	default:
+		// 空串/未知状态既不是受理也不是失败，但它绝不是"已发出"。
+		res.Failure = &push.Failure{
+			Kind: push.FailurePermanent, Provider: receipt.Provider,
+			Detail: "回执缺少可信的投递状态",
+		}
+		res.Outcome = OutcomeFailed
 	}
 	return res, nil
 }

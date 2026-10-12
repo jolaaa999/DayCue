@@ -659,3 +659,98 @@ func TestFailureDetailNeverLeaksToken(t *testing.T) {
 		t.Fatal("失败详情不得包含推送令牌明文")
 	}
 }
+
+// ---------- 回执语义锁定 ----------
+
+// TestProviderSuccessIsAcceptedNotDelivered 锁死回执语义：
+// APNs / FCM 的发送接口只回报"已受理"，HTTP 2xx 不得被写成 delivered。
+// 没有设备级回执就写 delivered 是虚报，界面会显示"已送达"，而手机可能根本没亮过屏。
+func TestProviderSuccessIsAcceptedNotDelivered(t *testing.T) {
+	_, pemBytes := testAPNsKey(t)
+	apnsSender, err := NewAPNs(APNsConfig{
+		KeyID: "K", TeamID: "T", BundleID: "B", PrivateKeyPEM: pemBytes,
+		Endpoint: "https://apns.invalid", HTTPClient: &stubDoer{status: http.StatusOK},
+		Now: clockAt(fixedNow),
+	})
+	if err != nil {
+		t.Fatalf("构造 APNs 失败: %v", err)
+	}
+	fcmSender, err := NewFCM(FCMConfig{
+		ProjectID: "proj", TokenSource: staticToken("tok"),
+		Endpoint: "https://fcm.invalid", HTTPClient: &stubDoer{status: http.StatusOK},
+		Now: clockAt(fixedNow),
+	})
+	if err != nil {
+		t.Fatalf("构造 FCM 失败: %v", err)
+	}
+
+	cases := []struct {
+		name string
+		s    Sender
+	}{{"apns", apnsSender}, {"fcm", fcmSender}}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			receipt, err := tc.s.Send(context.Background(), okTarget(), testMessage())
+			if err != nil {
+				t.Fatalf("2xx 不该失败: %v", err)
+			}
+			if receipt.Status != StatusAccepted {
+				t.Fatalf("供应商只回报受理，状态必须是 accepted，实际 %s", receipt.Status)
+			}
+			if receipt.DeliveredAt != nil {
+				t.Fatal("没有任何设备回执时不得写 DeliveredAt")
+			}
+		})
+	}
+}
+
+func TestStatusKnownRejectsEmptyAndUnknown(t *testing.T) {
+	for _, s := range []Status{StatusAccepted, StatusDelivered, StatusFailed} {
+		if !s.Known() {
+			t.Fatalf("%s 应当是已知状态", s)
+		}
+	}
+	// read 从未被定义：凭空认一个 read 就是欺骗用户。
+	for _, s := range []string{"", "sent", "read"} {
+		if Status(s).Known() {
+			t.Fatalf("%q 不应被当成已知状态", s)
+		}
+	}
+}
+
+// TestFailureKindRetryableMatchesRetryDecorator 锁住 retry.go 与 FailureKind.Retryable()
+// 的一致性：可重试的必须真的重试到上限，不可重试的（含 invalid_token）必须第一次就返回。
+func TestFailureKindRetryableMatchesRetryDecorator(t *testing.T) {
+	kinds := []FailureKind{
+		FailureNotConfigured, FailureUnsupportedPlatform, FailureMissingToken,
+		FailureInvalidToken, FailureEmptyMessage, FailureExpired,
+		FailureRateLimited, FailureProviderUnavailable, FailureProviderAuth, FailurePermanent,
+	}
+	policy := RetryPolicy{
+		MaxAttempts: 3, BaseDelay: time.Millisecond, MaxDelay: time.Millisecond,
+		Sleep: func(context.Context, time.Duration) error { return nil },
+	}
+	for _, k := range kinds {
+		t.Run(string(k), func(t *testing.T) {
+			attempts := 0
+			inner := SenderFunc(func(_ context.Context, target DeviceTarget, _ Message) (Receipt, error) {
+				attempts++
+				r, err := failureReceipt(target, &Failure{Kind: k, Provider: "test"}, fixedNow)
+				return r, err
+			})
+			if _, err := WithRetry(inner, policy).Send(context.Background(), okTarget(), testMessage()); err == nil {
+				t.Fatal("一直失败时最终必须报错")
+			}
+			want := 1
+			if k.Retryable() {
+				want = 3
+			}
+			if attempts != want {
+				t.Fatalf("%s 应尝试 %d 次，实际 %d 次", k, want, attempts)
+			}
+			if k == FailureInvalidToken && attempts != 1 {
+				t.Fatal("设备失效绝不能重试：那会一直打一台不存在的设备")
+			}
+		})
+	}
+}

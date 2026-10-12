@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://daycue.local/contracts/v1/proactive-delivery.schema.json",
   "title": "ProactiveMessageDelivery",
-  "description": "主动消息一次调度的结果与投递状态，对应 proactive.DeliveryResult、proactive.Decision 与 push.Receipt。投递状态刻意没有 read：服务端无法知道用户是否读过，凭空造一个 read 状态就是欺骗用户。持久化账本表 proactive_message.state 另有取值 pending、delivered、suppressed、expired、cancelled。当前服务端还没有暴露 HTTP 端点。",
+  "description": "【服务端内部模型，不是客户端 API 契约】主动消息一次调度的结果与投递状态，对应 proactive.DeliveryResult、proactive.Decision 与 push.Receipt。刻意不提供 HTTP 端点：投递状态由服务端在推送后自己记账（或由推送通道异步回报），客户端并不上报它。投递状态刻意没有 read：即便将来某条通道回报 delivered，那也只证明消息到达设备，不能证明设备展示了它，更不能证明用户读过；凭空造一个 read 状态就是欺骗用户。当前 APNs / FCM 的发送接口都只回报已受理，因此 delivered 在现有实现里不可达。持久化账本表 proactive_message.state 另有取值 pending、delivered、suppressed、expired、cancelled（表已建，但 Go 侧尚未读写）。",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -19,7 +19,7 @@
         "deferred",
         "failed"
       ],
-      "description": "accepted=推送服务已受理，不等于设备收到；delivered=供应商回报设备已确认送达；suppressed=按策略彻底放弃；deferred=只是推迟，之后仍应重试；failed=已尝试投递但失败。"
+      "description": "accepted=推送服务已受理，不等于设备收到；delivered=供应商回报设备已确认送达（当前 APNs/FCM 发送接口不提供该信号，不可达）；suppressed=按策略彻底放弃；deferred=只是推迟，之后仍应重试；failed=已尝试投递但失败。"
     },
     "reason": {
       "enum": [

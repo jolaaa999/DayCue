@@ -35,6 +35,76 @@ type Config struct {
 
 	LLM ProviderConfig
 	ASR ProviderConfig
+
+	// ---- 主动推送（可选）----
+	// 凭据缺失不是错误：对应平台会注册 push.Unconfigured 并在启动日志里明确报「未配置」，
+	// 让运维一眼看出推送为什么没有真正发出。
+	Push PushConfig
+}
+
+// PushConfig 是主动推送的凭据与调度参数。
+//
+// 所有凭据只来自环境变量（与 LLM/ASR 一致），绝不落盘、绝不写进日志。
+// 环境变量名固定如下，运维据此判断「到底缺哪一项」：
+//
+//	DAYCUE_APNS_KEY_ID / DAYCUE_APNS_TEAM_ID / DAYCUE_APNS_BUNDLE_ID
+//	DAYCUE_APNS_KEY_FILE（.p8 路径）或 DAYCUE_APNS_KEY_PEM（.p8 内容，二选一）
+//	DAYCUE_APNS_ENDPOINT（可选；沙箱用 https://api.sandbox.push.apple.com，生产留空）
+//	DAYCUE_FCM_PROJECT_ID
+//	DAYCUE_FCM_SERVICE_ACCOUNT_FILE 或 DAYCUE_FCM_SERVICE_ACCOUNT_JSON（二选一）
+//	DAYCUE_FCM_ENDPOINT（可选）
+//	DAYCUE_PROACTIVE_INTERVAL（默认 1m）、DAYCUE_PROACTIVE_CLAIM_LIMIT（默认 50）
+type PushConfig struct {
+	APNsKeyID    string
+	APNsTeamID   string
+	APNsBundleID string
+	// APNsKeyPEM 与 APNsKeyFile 二选一；同时存在时以文件为准（组装层负责读取）。
+	APNsKeyPEM   string
+	APNsKeyFile  string
+	APNsEndpoint string
+
+	FCMProjectID string
+	// FCMServiceAccountJSON 与 FCMServiceAccountFile 二选一；同时存在时以文件为准。
+	FCMServiceAccountJSON string
+	FCMServiceAccountFile string
+	FCMEndpoint           string
+
+	// Interval 是主动推送调度循环的间隔。
+	Interval time.Duration
+	// ClaimLimit 是单轮最多认领条数。
+	ClaimLimit int
+}
+
+// MissingAPNsEnv 返回 APNs 缺失的必填环境变量名；为空表示凭据齐全。
+//
+// 返回变量名而不是布尔值：运维需要知道的是「去配哪一个」，不是「没配好」。
+func (p PushConfig) MissingAPNsEnv() []string {
+	var missing []string
+	if strings.TrimSpace(p.APNsKeyID) == "" {
+		missing = append(missing, "DAYCUE_APNS_KEY_ID")
+	}
+	if strings.TrimSpace(p.APNsTeamID) == "" {
+		missing = append(missing, "DAYCUE_APNS_TEAM_ID")
+	}
+	if strings.TrimSpace(p.APNsBundleID) == "" {
+		missing = append(missing, "DAYCUE_APNS_BUNDLE_ID")
+	}
+	if strings.TrimSpace(p.APNsKeyFile) == "" && strings.TrimSpace(p.APNsKeyPEM) == "" {
+		missing = append(missing, "DAYCUE_APNS_KEY_FILE 或 DAYCUE_APNS_KEY_PEM")
+	}
+	return missing
+}
+
+// MissingFCMEnv 返回 FCM 缺失的必填环境变量名；为空表示凭据齐全。
+func (p PushConfig) MissingFCMEnv() []string {
+	var missing []string
+	if strings.TrimSpace(p.FCMProjectID) == "" {
+		missing = append(missing, "DAYCUE_FCM_PROJECT_ID")
+	}
+	if strings.TrimSpace(p.FCMServiceAccountFile) == "" && strings.TrimSpace(p.FCMServiceAccountJSON) == "" {
+		missing = append(missing, "DAYCUE_FCM_SERVICE_ACCOUNT_FILE 或 DAYCUE_FCM_SERVICE_ACCOUNT_JSON")
+	}
+	return missing
 }
 
 // ProviderConfig 描述一个上游 AI 供应商；BaseURL 为空表示未配置。
@@ -76,6 +146,20 @@ func Load() Config {
 		APIKey:  os.Getenv("DAYCUE_ASR_API_KEY"),
 		Model:   env("DAYCUE_ASR_MODEL", "whisper-1"),
 		Timeout: envDuration("DAYCUE_ASR_TIMEOUT", 60*time.Second),
+	}
+	c.Push = PushConfig{
+		APNsKeyID:             os.Getenv("DAYCUE_APNS_KEY_ID"),
+		APNsTeamID:            os.Getenv("DAYCUE_APNS_TEAM_ID"),
+		APNsBundleID:          os.Getenv("DAYCUE_APNS_BUNDLE_ID"),
+		APNsKeyPEM:            os.Getenv("DAYCUE_APNS_KEY_PEM"),
+		APNsKeyFile:           os.Getenv("DAYCUE_APNS_KEY_FILE"),
+		APNsEndpoint:          os.Getenv("DAYCUE_APNS_ENDPOINT"),
+		FCMProjectID:          os.Getenv("DAYCUE_FCM_PROJECT_ID"),
+		FCMServiceAccountJSON: os.Getenv("DAYCUE_FCM_SERVICE_ACCOUNT_JSON"),
+		FCMServiceAccountFile: os.Getenv("DAYCUE_FCM_SERVICE_ACCOUNT_FILE"),
+		FCMEndpoint:           os.Getenv("DAYCUE_FCM_ENDPOINT"),
+		Interval:              envDuration("DAYCUE_PROACTIVE_INTERVAL", time.Minute),
+		ClaimLimit:            int(envInt64("DAYCUE_PROACTIVE_CLAIM_LIMIT", 50)),
 	}
 	return c
 }

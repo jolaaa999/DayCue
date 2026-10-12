@@ -419,3 +419,39 @@ func TestSchedulerDescribeIsHumanReadable(t *testing.T) {
 		t.Fatal("成功也必须有可展示的说明")
 	}
 }
+
+// TestSchedulerNeverClaimsAcceptedWithoutAcceptedReceipt 锁死回执语义：
+// 只有回执明确写 accepted 才允许报"已提交给推送服务"；
+// 自称失败但没有 error、以及空/未知状态，都必须如实归为失败，不能兜成 accepted。
+func TestSchedulerNeverClaimsAcceptedWithoutAcceptedReceipt(t *testing.T) {
+	cases := []struct {
+		name    string
+		receipt push.Receipt
+	}{
+		{"回执自称失败但没有 error", push.Receipt{Provider: "fake", Status: push.StatusFailed}},
+		{"回执状态为空", push.Receipt{Provider: "fake"}},
+		{"回执状态未知", push.Receipt{Provider: "fake", Status: push.Status("sent")}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			sender := &fakeSender{receipt: tc.receipt}
+			sch := newTestScheduler(t, testPolicy(3), sender)
+			res, err := sch.Deliver(context.Background(), testTarget(), dueItem("geo:1"))
+			if err != nil {
+				t.Fatalf("推送失败属于结局而不是 error: %v", err)
+			}
+			if res.Outcome != OutcomeFailed {
+				t.Fatalf("没有可信回执时必须归为失败，实际 %s", res.Outcome)
+			}
+			if res.Sent() {
+				t.Fatal("没有可信回执不得算作已发送")
+			}
+			if res.Failure == nil {
+				t.Fatal("归为失败时必须给出失败详情")
+			}
+			if res.Describe() == "已提交给推送服务" {
+				t.Fatal("不得在未知回执下宣称已提交")
+			}
+		})
+	}
+}

@@ -34,9 +34,20 @@ func main() {
 
 	// 云同步是可选能力：未配置数据库时这里返回 nil，服务只提供 AI 端点。
 	// 配置了却无法初始化（缺驱动等）则拒绝启动，避免"以为在同步其实没有"。
-	cloudHandler, cloudNote, err := newCloudSyncHandler(cfg, srv)
+	cloudHandler, cloudStore, cloudNote, err := newCloudSyncHandler(cfg, srv)
 	if err != nil {
 		slog.Error("云同步初始化失败，拒绝启动", "error", err.Error())
+		os.Exit(1)
+	}
+
+	// 主动推送与 HTTP 服务共用同一条生命周期：ctx 取消即随优雅关闭一起停。
+	runCtx, cancelRun := context.WithCancel(context.Background())
+	defer cancelRun()
+
+	// 没有数据库时返回 nil runner 与一条说明（明确不启动）；凭据格式非法等才拒绝启动。
+	pushRunner, pushInterval, pushNote, err := newProactiveRunner(cfg, cloudStore)
+	if err != nil {
+		slog.Error("主动推送初始化失败，拒绝启动", "error", err.Error())
 		os.Exit(1)
 	}
 	rootHandler := http.Handler(srv.Handler())
@@ -64,6 +75,13 @@ func main() {
 	if cloudNote != "" {
 		slog.Info(cloudNote)
 	}
+	if pushNote != "" {
+		slog.Info(pushNote)
+	}
+	if pushRunner != nil {
+		// 主动推送调度后台运行；单轮错误只记日志，不会拖垮 HTTP 服务。
+		go pushRunner.Start(runCtx, pushInterval)
+	}
 	if cfg.FixtureMode {
 		slog.Warn("模拟模式已开启：所有整理结果都是预设样例，不构成真实 AI 调用，界面上会标记为「模拟结果」")
 	}
@@ -88,6 +106,9 @@ func main() {
 	case <-stop:
 		slog.Info("收到退出信号，开始优雅关闭")
 	}
+
+	// 先停调度循环再关 HTTP：避免关闭过程中还在往推送通道发消息。
+	cancelRun()
 
 	ctx, cancel := context.WithTimeout(context.Background(), cfg.ShutdownGrace)
 	defer cancel()

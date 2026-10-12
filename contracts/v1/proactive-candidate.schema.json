@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://daycue.local/contracts/v1/proactive-candidate.schema.json",
   "title": "ProactiveMessageCandidate",
-  "description": "一条待判定的主动消息候选，对应 internal/proactive 的 Candidate 与 Item。当前服务端还没有暴露 HTTP 端点，本契约先把内部类型的字段名固定下来，避免将来上线时两边对不上。",
+  "description": "【服务端内部模型，不是客户端 API 契约】一条待判定的主动消息候选，对应 internal/proactive 的 Candidate 与 Item。刻意不提供 HTTP 端点：候选由服务端调度器在服务端产生与消费，客户端从不请求它，强行造一个只有服务端自己调用的 REST 端点只会增加攻击面。这里保留 schema 是为了把内部字段名固定下来，避免将来真的需要下发时两边对不上。客户端能感知到的主动消息是推送通知本身，不是这个模型。",
   "type": "object",
   "additionalProperties": false,
   "required": [
