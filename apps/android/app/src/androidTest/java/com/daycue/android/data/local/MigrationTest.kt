@@ -21,11 +21,12 @@ import org.junit.runner.RunWith
  * 硬造一个 v1 建表脚本等于凭空发明历史 schema，那是伪造，不是验证。
  * 将来真的发布 v1 时 KSP 会导出 1.json，届时应补上标准的 1 → 2 用例。
  *
- * 现在这两条覆盖的是同一件事里**只能靠设备证明**的部分：
+ * 现在这三条覆盖的是同一件事里**只能靠设备证明**的部分：
  * 1. 已提交的 2.json 能被 Room 真正打开（列类型、主键、索引在真实 SQLite 上都成立）；
- * 2. 迁移 DDL 在真实 SQLite 上可执行、且可重复执行。
- *    第 2 条尤其重要：纯 JVM 的漂移守卫只能比列名集合，
- *    它看不出 SQL 语法错误、类型亲和性问题或索引名冲突，那些只有真库会拒绝。
+ * 2. MIGRATION_1_2 的建表 DDL 在真实 SQLite 上可执行、且可重复执行；
+ * 3. MIGRATION_2_3 跑完之后，库结构与当前版本的导出 schema 完全一致（由 Room 自己校验）。
+ *    第 3 条尤其重要：纯 JVM 的漂移守卫只能比列名集合，
+ *    它看不出 NOT NULL / DEFAULT 的差别、类型亲和性问题或索引没建出来，那些只有真库会拒绝。
  */
 @RunWith(AndroidJUnit4::class)
 class MigrationTest {
@@ -42,6 +43,23 @@ class MigrationTest {
     @Test
     fun committedSchemaVersion2CanBeOpenedByRoom() {
         helper.createDatabase(databaseName, 2).close()
+    }
+
+    /**
+     * v2 -> v3：真实 SQLite 上跑一遍 MIGRATION_2_3，并让 Room 用它自己的眼睛校验结果。
+     *
+     * 为什么这条比 JVM 的漂移守卫重要：漂移守卫只能比「列名集合」，
+     * 它看不出 NOT NULL 与 DEFAULT 的差别、看不出索引有没有真的建出来。
+     * 而 MIGRATION_2_3 用 ADD COLUMN 加 NOT NULL 列，默认值一旦与实体声明的
+     * defaultValue 不一致，Room 在真机升级时会直接抛
+     * "Migration didn't properly handle: place"，那时用户已经走在升级路径上了。
+     *
+     * 验证对象是导出 schema 的**目标版本**：2.json 描述升级前的样子，
+     * 迁移产物必须与当前版本的导出 schema 完全一致（runMigrationsAndValidate 会补上新的 identity hash）。
+     */
+    @Test
+    fun migration2To3UpgradesToCurrentSchema() {
+        helper.runMigrationsAndValidate(databaseName, 3, true, DayCueMigrations.MIGRATION_2_3)
     }
 
     /**

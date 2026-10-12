@@ -94,6 +94,19 @@ class SettingsRepository(
     suspend fun setLocationRulesEnabled(enabled: Boolean) =
         dao.put(AppSettingRecord(KEY_LOCATION_RULES, if (enabled) "1" else "0"))
 
+    // ---- 设备身份 ----
+
+    /**
+     * 本机设备 id。
+     *
+     * 客户端自己生成并持久化（dev_ + 32 位十六进制），**不**让服务端生成：
+     * 请求成功但响应丢失时，重试必须是同一个 id 的 upsert，
+     * 否则服务端会留下第二台「幽灵设备」，推送与能力上报都会分叉。
+     */
+    suspend fun deviceId(): String? = dao.get(KEY_DEVICE_ID)?.takeIf { it.isNotBlank() }
+
+    suspend fun setDeviceId(value: String) = dao.put(AppSettingRecord(KEY_DEVICE_ID, value))
+
     /** 最近一次同步游标的时间，用于设置页显示「上次同步」。 */
     suspend fun lastSyncAt(): String? = dao.get(KEY_LAST_SYNC_AT)
 
@@ -116,6 +129,7 @@ class SettingsRepository(
         const val KEY_QUIET_START = "budget.quiet_start"
         const val KEY_QUIET_END = "budget.quiet_end"
         const val KEY_LOCATION_RULES = "location.rules_enabled"
+        const val KEY_DEVICE_ID = "device.id"
         const val KEY_LAST_SYNC_AT = "sync.last_at"
     }
 }

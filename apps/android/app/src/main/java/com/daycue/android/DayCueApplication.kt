@@ -39,6 +39,22 @@ class DayCueApplication : Application(), Configuration.Provider {
             runCatching { container.geoCoordinator.refreshRegistration() }
                 .onFailure { Log.w(TAG, "启动时重建地点规则注册失败", it) }
         }
+        // 设备能力与 IANA 时区上报。
+        //
+        // 放在启动时做一次：能力（权限）随时可能被用户改，每次启动现读一次最接近事实；
+        // 时区也在这里现读，用户跨时区或改了系统时区之后下一次启动就会修正。
+        // 纯本地模式不发起任何请求——那是这个产品的合法形态，静默联网才是错的。
+        container.applicationScope.launch {
+            if (container.isPurelyLocal()) {
+                Log.i(TAG, "纯本地模式，跳过设备上报")
+                return@launch
+            }
+            container.deviceReportService.report()
+                .onSuccess { outcome ->
+                    Log.i(TAG, "设备已上报：" + outcome.deviceId + "，时区 " + outcome.reportedTimezone)
+                }
+                .onFailure { error -> Log.w(TAG, "设备上报失败，本次跳过（不影响本地功能）", error) }
+        }
     }
 
     /**

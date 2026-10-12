@@ -25,6 +25,11 @@ data class GeoRuleSpec(
     val weekdays: List<Int> = emptyList(),
     val enabled: Boolean = true,
     val expiresAt: Instant? = null,
+    /**
+     * 触发时要指向的任务（可空）。
+     * 判定本身不看它——它只决定通知点开之后落到哪条任务上，所以不参与任何触发条件。
+     */
+    val linkedTaskId: String? = null,
 )
 
 data class GeoState(

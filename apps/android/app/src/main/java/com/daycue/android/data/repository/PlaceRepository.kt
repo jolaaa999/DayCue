@@ -9,10 +9,34 @@ import com.daycue.android.domain.location.GeoPlaceSpec
 import com.daycue.android.domain.location.GeoRuleCatalog
 import com.daycue.android.domain.location.GeoRuleSpec
 import com.daycue.android.domain.location.LocationCapability
+import com.daycue.android.domain.model.CoordinateSystem
 import com.daycue.android.domain.model.PlaceTrigger
 import kotlinx.coroutines.flow.Flow
 import java.time.Instant
 import java.time.LocalTime
+
+/**
+ * 地点链路对「规则集合变了」这件事的接收口。
+ *
+ * 为什么单独抽一个窄接口而不是让界面直接拿 GeoProactiveCoordinator：
+ * 界面只需要「重新注册」与「取消这些规则的待发通知」两件事，
+ * 依赖整个协调器会让 ViewModel 的单元测试必须构造六七个替身（ledger、notifier、source…），
+ * 而真正要断言的行为只有「有没有调用」——窄接口让这件事在 JVM 上一条用例就能证明。
+ * 生产实现在 AppContainer：GeoProactiveCoordinator 自适应实现它。
+ */
+interface GeoRuleChangeListener {
+
+    /**
+     * 规则 / 地点增删改之后重新对账注册（围栏 + 停留复查 + 权限同步都在里面）。
+     *
+     * 不带时刻参数：界面关心的是「现在重新对账」，「现在」由协调器自己的时钟给出。
+     * 需要固定时刻的测试直接用具体类型的那两个重载。
+     */
+    suspend fun onRuleChanged()
+
+    /** 规则被删除：先取消它们已经排上的通知，再重新对账。 */
+    suspend fun onRulesRemoved(ruleIds: List<String>)
+}
 
 /**
  * 地点与位置规则仓储。
@@ -35,17 +59,30 @@ class PlaceRepository(
 
     suspend fun findPlace(id: String): PlaceRecord? = placeDao.findById(id)
 
-    /** 只有用户确认过的地点才允许参与自动触发，所以 confirmedByUser 不是可选装饰。 */
+    suspend fun findRule(id: String): GeoRuleRecord? = geoRuleDao.findById(id)
+
+    /**
+     * 新建一个用户确认过的地点。
+     *
+     * coordinateSystem 没有默认值：默认值会把「调用方忘了传」伪装成「确实是 WGS84」，
+     * 而这正是坐标系这一列存在的意义——将来接入 GCJ-02 取点来源时，两类数据必须一眼可分。
+     *
+     * 校验放在仓储而不是界面：界面只是入口之一，围栏注册读的是库里的值，
+     * 一条经度 200 的记录会被系统围栏直接拒绝注册，表现出来就是「规则开着但永远不响」。
+     */
     suspend fun createConfirmedPlace(
         name: String,
         latitude: Double,
         longitude: Double,
         radiusMeters: Double,
+        coordinateSystem: CoordinateSystem,
         address: String? = null,
     ): String {
+        require(name.isNotBlank()) { "地点名称不能为空" }
         require(latitude in -90.0..90.0) { "纬度必须在 -90..90" }
         require(longitude in -180.0..180.0) { "经度必须在 -180..180" }
         require(radiusMeters > 0) { "半径必须为正数" }
+        require(!latitude.isNaN() && !longitude.isNaN() && !radiusMeters.isNaN()) { "坐标与半径必须是有效数字" }
         val now = timeSource.now()
         val id = DayCueId.new()
         placeDao.insert(
@@ -55,7 +92,8 @@ class PlaceRepository(
                 latitude = latitude,
                 longitude = longitude,
                 radiusMeters = radiusMeters,
-                address = address,
+                address = address?.trim()?.takeIf { it.isNotEmpty() },
+                coordinateSystem = coordinateSystem,
                 confirmedByUser = true,
                 createdAt = now,
                 updatedAt = now,
@@ -64,6 +102,17 @@ class PlaceRepository(
         return id
     }
 
+    /**
+     * 新建或更新一条地点规则。
+     *
+     * ruleId 的默认值是**新建语义**（生成一个新 id）；编辑必须显式传入既有 id，
+     * 因为 upsertRule 是 @Insert(ABORT)，传新 id 就会在库里多出一条规则，
+     * 而那条新规则会以同一个 dedupe_key 前缀重新注册围栏——表现为「改一次规则，收到两份提醒」。
+     * 编辑路径由 GeoRuleDao.findById 读回 createdAt，不让「创建时间」被一次编辑改写。
+     *
+     * enabled 是用户在这个界面上的意图，但还是会被能力再夹一次：
+     * 定位不可用时规则必须落成「已暂停」并写明原因，不能显示成正常运行。
+     */
     suspend fun upsertRule(
         placeId: String,
         trigger: PlaceTrigger,
@@ -77,25 +126,43 @@ class PlaceRepository(
         activeTo: LocalTime? = null,
         expiresAt: Instant? = null,
         ruleId: String = DayCueId.new(),
+        enabled: Boolean = true,
+        linkedTaskId: String? = null,
     ): GeoRuleRecord {
+        require(title.isNotBlank()) { "规则标题不能为空" }
+        // 停留时长只对「停留」有意义：其余触发条件置 0，否则界面上会出现一个永远不参与判定的秒数。
+        val dwell = if (trigger == PlaceTrigger.DWELL) minDwellSeconds else 0
+        require(dwell >= 0) { "最短停留秒数不能为负" }
+        require(cooldownSeconds >= 0) { "冷却秒数不能为负" }
+        require(weekdays.all { it in 1..7 }) { "生效星期取值必须在 1..7 之间" }
+        // 先确认地点真的存在且是用户确认过的：geo_rule 有指向 place 的外键，
+        // 指向不存在的地点会让插入直接抛 SQLiteConstraintException（用户看到的是一个英文堆栈），
+        // 指向未确认的地点则会静默生成一条永远不会触发的规则。
+        val place = placeDao.findById(placeId)
+        requireNotNull(place) { "规则必须挂在一个已存在的地点上" }
+        require(place.confirmedByUser) { "这个地点还没有被用户确认，不能为它建规则" }
         val now = timeSource.now()
-        // 建规则时就要求能定位：否则用户以为设好了，实际永远不会触发。
-        val enabled = availability.isUsable
+
+        val existing = geoRuleDao.findById(ruleId)
+        val usable = availability.isUsable && enabled
         val record = GeoRuleRecord(
             id = ruleId,
             placeId = placeId,
             trigger = trigger,
-            title = title,
-            body = body ?: if (enabled) null else "定位不可用（" + availability.displayName + "），这条规则已暂停",
-            minDwellSeconds = minDwellSeconds,
+            title = title.trim(),
+            body = body?.trim()?.takeIf { it.isNotEmpty() }
+                ?: if (usable) null else "定位不可用（" + availability.displayName + "），这条规则已暂停",
+            minDwellSeconds = dwell,
             cooldownSeconds = cooldownSeconds,
             activeFromLocal = activeFrom,
             activeToLocal = activeTo,
-            weekdays = weekdays,
-            enabled = enabled,
+            weekdays = weekdays.distinct().sorted(),
+            enabled = usable,
+            linkedTaskId = linkedTaskId?.takeIf { it.isNotBlank() },
             expiresAtUtc = expiresAt,
-            createdAt = now,
+            createdAt = existing?.createdAt ?: now,
             updatedAt = now,
+            deletedAt = null,
         )
         geoRuleDao.insert(record)
         return record
@@ -108,7 +175,47 @@ class PlaceRepository(
 
     suspend fun listConfirmedPlaces(): List<PlaceRecord> = placeDao.listConfirmed()
 
-    suspend fun deletePlace(placeId: String) = placeDao.softDelete(placeId, timeSource.now())
+    /**
+     * 更新一个已有地点（名称 / 坐标 / 半径 / 地址）。
+     *
+     * 与 createConfirmedPlace 一样在这里做校验：改半径是最容易出错的入口
+     * （用户把半径删空、或滑到 0），落库前必须挡住。
+     */
+    suspend fun updatePlace(place: PlaceRecord): PlaceRecord {
+        require(place.name.isNotBlank()) { "地点名称不能为空" }
+        require(place.latitude in -90.0..90.0) { "纬度必须在 -90..90" }
+        require(place.longitude in -180.0..180.0) { "经度必须在 -180..180" }
+        require(place.radiusMeters > 0) { "半径必须为正数" }
+        val updated = place.copy(
+            name = place.name.trim(),
+            address = place.address?.trim()?.takeIf { it.isNotEmpty() },
+            updatedAt = timeSource.now(),
+        )
+        placeDao.update(updated)
+        return updated
+    }
+
+    /** 删除地点下的全部规则。编辑 / 删除地点时必须先撤掉这些规则，见 deletePlace。 */
+    suspend fun rulesForPlace(placeId: String): List<GeoRuleRecord> = geoRuleDao.listForPlace(placeId)
+
+    /**
+     * 删除地点。
+     *
+     * 必须**同时**软删除它下面的规则，不能只靠外键 CASCADE：
+     * CASCADE 只在物理 DELETE 时触发，而这里是软删除（行还在，只置 deleted_at），
+     * 于是规则会留下来指向一个已删地点，界面上表现为一条「地点已不存在」的僵尸规则。
+     *
+     * 返回被一起删掉的规则 id，调用方要拿它去取消已经排上的通知。
+     */
+    suspend fun deletePlace(placeId: String): List<String> {
+        val now = timeSource.now()
+        val rules = geoRuleDao.listForPlace(placeId)
+        for (rule in rules) {
+            geoRuleDao.softDelete(rule.id, now)
+        }
+        placeDao.softDelete(placeId, now)
+        return rules.map { it.id }
+    }
 
     suspend fun deleteRule(ruleId: String) = geoRuleDao.softDelete(ruleId, timeSource.now())
 
@@ -164,6 +271,7 @@ class PlaceRepository(
         weekdays = weekdays,
         enabled = enabled,
         expiresAt = expiresAtUtc,
+        linkedTaskId = linkedTaskId,
     )
 
     private fun PlaceRecord.toSpec() = GeoPlaceSpec(

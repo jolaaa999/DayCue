@@ -17,7 +17,9 @@ import java.io.File
  * 这个测试把同一件事提前到构建期的纯 JVM 单元测试里：不需要设备，因此在 Windows 上也能真实执行。
  *
  * 它校验三件独立的事：
- * 1. 迁移里建表的每一张表，在已提交的 2.json 里都存在，且列集合完全一致；
+ * 1. 迁移改写过的每一张表，在已提交的 schema 里都存在，且列集合完全一致；
+ *    列集合 = 迁移里的 CREATE TABLE 列 **并上** 所有 ALTER TABLE ADD COLUMN 的列，
+ *    否则「v3 用 ADD COLUMN 加了两列」会被误报成「迁移少了两列」；
  * 2. 已提交 schema 里的每一张表，要么由迁移创建，要么在 v1 基础表白名单里，
  *    这条能在「新加了实体却忘了写迁移」时立刻失败；
  * 3. schema 的版本号与 DayCueDatabase.kt 里声明的 version 一致。
@@ -52,10 +54,17 @@ class MigrationSchemaDriftTest {
         for ((table, migrationColumns) in migration) {
             val schemaColumns = schema[table]
             assertTrue(
-                "迁移创建了表 " + table + "，但已提交的 2.json 里没有这张表：" +
+                "迁移里出现了表 " + table + "，但已提交的 schema 里没有这张表：" +
                     "说明迁移建了一张实体里不存在的表，Room 会在真机升级时抛异常。",
                 schemaColumns != null,
             )
+            if (table in v1BaseTables) {
+                // v1 就存在的表（memory_item）在迁移里只有一句 ADD COLUMN，
+                // 拿它的建表列来比会必然失败——v1 的建表语句根本不在这个仓库里
+                // （Android 端从未发布过 v1，没有 1.json 可导出）。
+                // 这 5 张表与实体的对应关系由 Room 自己的 schema 校验负责，不在这里重复。
+                continue
+            }
             assertEquals(
                 "表 " + table + " 的列集合与已提交 schema 不一致（迁移 DDL 必须与实体逐字对应）",
                 schemaColumns!!.sorted(),
@@ -107,10 +116,15 @@ class MigrationSchemaDriftTest {
         }
     }
 
-    /** 从 Migrations.kt 源码里解析出「迁移创建的 表名 -> 列名集合」。 */
-    private fun migrationTables(): Map<String, Set<String>> {
+    /**
+     * 从 Migrations.kt 源码里解析出「迁移改写过的 表名 -> 列名集合」。
+     *
+     * 两类语句都要读：CREATE TABLE 给出建表时的列，ALTER TABLE ADD COLUMN 给出后续版本补上的列。
+     * 只看 CREATE TABLE 会让「用 ADD COLUMN 加列」的迁移被误判成漏列（MIGRATION_2_3 就是这种写法）。
+     */
+    private fun migrationTables(): Map<String, MutableSet<String>> {
         val source = locate("src/main/java/com/daycue/android/data/local/Migrations.kt").readText()
-        val result = linkedMapOf<String, Set<String>>()
+        val result = linkedMapOf<String, MutableSet<String>>()
         for (match in CREATE_TABLE.findAll(source)) {
             val table = match.groupValues[1]
             val columns = match.groupValues[2]
@@ -129,7 +143,12 @@ class MigrationSchemaDriftTest {
                 .filter { COLUMN_DEFINITION.containsMatchIn(it) }
                 .map { it.split(WHITESPACE).first() }
                 .toSet()
-            result[table] = columns
+            result.getOrPut(table) { linkedSetOf() }.addAll(columns)
+        }
+        // ADD COLUMN 必须最后叠加：v1 就存在的表（memory_item）会先由 1_2 里的补列语句登记进来，
+        // 先处理 ALTER 再处理 CREATE 会让它只拿到「补的那一列」。
+        for (match in ALTER_ADD_COLUMN.findAll(source)) {
+            result.getOrPut(match.groupValues[1]) { linkedSetOf() }.add(match.groupValues[2])
         }
         return result
     }
@@ -143,7 +162,7 @@ class MigrationSchemaDriftTest {
     }
 
     private fun schemaJson() = Json.parseToJsonElement(
-        locate("schemas/com.daycue.android.data.local.DayCueDatabase/2.json").readText(),
+        locate("schemas/com.daycue.android.data.local.DayCueDatabase/3.json").readText(),
     )
 
     /**
@@ -180,6 +199,12 @@ class MigrationSchemaDriftTest {
          * 这些碎片不符合「标识符 + 空白 + 标识符」的形状。
          */
         val COLUMN_DEFINITION = Regex("^\\w+\\s+\\w")
+
+        /**
+         * 匹配 ALTER TABLE ... ADD COLUMN。
+         * 末尾允许带 NOT NULL DEFAULT '...'，只取表名与列名，默认值由导出 schema 那边比对。
+         */
+        val ALTER_ADD_COLUMN = Regex("ALTER TABLE (\\w+) ADD COLUMN (\\w+)")
 
         /** 匹配 @Database 注解里的 version = N。 */
         val DECLARED_VERSION = Regex("version\\s*=\\s*(\\d+)")

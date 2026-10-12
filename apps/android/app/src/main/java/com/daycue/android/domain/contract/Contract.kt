@@ -176,6 +176,37 @@ data class TranscriptionResponse(
     val warnings: List<String>? = null,
 )
 
+// ---------------- 设备登记 ----------------
+
+/**
+ * 设备登记 / 更新（POST /v1/devices）。
+ *
+ * capabilities 用 Map<String, Boolean>：服务端只认「键存在 = 已确认」，
+ * 所以未知的能力必须省略而不是填 false（填 false 会让服务端以为设备确实收不到通知）。
+ *
+ * 刻意**没有** timezone 字段：IANA 时区是跟着每个已鉴权请求走的请求头
+ * （X-DayCue-Timezone，见 DayCueApiClient），服务端在每个请求上都会读它并更新用户时区。
+ * 放进请求体会多出一条只有设备登记才更新的路径，两条路径迟早不一致。
+ */
+@Serializable
+data class DeviceUpsertRequest(
+    @SerialName("id") val id: String? = null,
+    val platform: String = "android",
+    val name: String,
+    val capabilities: Map<String, Boolean> = emptyMap(),
+    @SerialName("push_token") val pushToken: String? = null,
+)
+
+/** 设备登记的响应，取服务端确认后的最终值（id / last_seen_at 可能被服务端修正）。 */
+@Serializable
+data class DeviceUpsertResponse(
+    val id: String,
+    val platform: String? = null,
+    val name: String? = null,
+    val capabilities: Map<String, Boolean> = emptyMap(),
+    @SerialName("last_seen_at") val lastSeenAt: String? = null,
+)
+
 // ---------------- 错误响应 ----------------
 
 /**

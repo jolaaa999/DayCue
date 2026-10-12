@@ -6,6 +6,7 @@ import com.daycue.android.core.DayCueTime
 import com.daycue.android.domain.model.CaptureKind
 import com.daycue.android.domain.model.CaptureStatus
 import com.daycue.android.domain.model.CourseInstanceOrigin
+import com.daycue.android.domain.model.CoordinateSystem
 import com.daycue.android.domain.model.CourseInstanceStatus
 import com.daycue.android.domain.model.DueKind
 import com.daycue.android.domain.model.ExternalWriteState
@@ -141,6 +142,15 @@ class DayCueConverters {
 
     @TypeConverter fun memorySourceKindToRaw(value: MemorySourceKind): String = value.raw
     @TypeConverter fun rawToMemorySourceKind(value: String): MemorySourceKind = MemorySourceKind.fromRaw(value)
+
+    @TypeConverter fun coordinateSystemToRaw(value: CoordinateSystem): String = value.raw
+
+    /**
+     * 解析不出已知坐标系时按 WGS84 处理，而不是抛异常。
+     * 地点本身必须能读出来（否则规则与围栏都会失效），坐标系认不出来属于「按最常见的处理并保留原值」。
+     */
+    @TypeConverter fun rawToCoordinateSystem(value: String): CoordinateSystem =
+        CoordinateSystem.fromRawOrDefault(value)
 
     @TypeConverter fun placeTriggerToRaw(value: PlaceTrigger): String = value.raw
     @TypeConverter fun rawToPlaceTrigger(value: String): PlaceTrigger = PlaceTrigger.fromRaw(value)

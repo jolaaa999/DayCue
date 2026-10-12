@@ -279,6 +279,25 @@ object DayCueMigrations {
         }
     }
 
-    /** Room 在 build 时按顺序取用；将来加 MIGRATION_2_3 时只需要往这里追加。 */
-    val ALL: Array<Migration> = arrayOf(MIGRATION_1_2)
+    /**
+     * v2 -> v3：地点坐标系 + 规则关联任务。
+     *
+     * 为什么用 ADD COLUMN 而不是重建表：两张表都已有用户数据（v2 是真机可能存在的版本），
+     * 重建表要么写一整套「建新表 / 搬数据 / 删旧表 / 改名」，要么冒着漏列的风险；
+     * 而这两列都允许有确定默认值（坐标系 wgs84、关联任务为 NULL），ADD COLUMN 是等价且更小的动作。
+     *
+     * DEFAULT 'wgs84' 必须与 PlaceRecord 的 @ColumnInfo(defaultValue = "wgs84") 逐字一致，
+     * 否则 Room 在启动校验时会对不上——这条由 MigrationSchemaDriftTest 与真机 MigrationTestHelper 双重把关。
+     */
+    val MIGRATION_2_3: Migration = object : Migration(2, 3) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            db.execSQL("ALTER TABLE place ADD COLUMN coordinate_system TEXT NOT NULL DEFAULT 'wgs84'")
+            db.execSQL("ALTER TABLE geo_rule ADD COLUMN linked_task_id TEXT")
+            // 索引必须一起补：Room 的实体声明了它，少了索引启动校验同样会失败。
+            db.execSQL("CREATE INDEX IF NOT EXISTS index_geo_rule_linked_task_id ON geo_rule(linked_task_id)")
+        }
+    }
+
+    /** Room 在 build 时按顺序取用；将来加 MIGRATION_3_4 时只需要往这里追加。 */
+    val ALL: Array<Migration> = arrayOf(MIGRATION_1_2, MIGRATION_2_3)
 }

@@ -105,6 +105,10 @@ interface GeoRuleDao {
     @Query("SELECT * FROM geo_rule WHERE deleted_at IS NULL")
     suspend fun listAll(): List<GeoRuleRecord>
 
+    /** 某个地点下的全部未删除规则：删除地点时要连它们一起软删除并取消通知。 */
+    @Query("SELECT * FROM geo_rule WHERE deleted_at IS NULL AND place_id = :placeId")
+    suspend fun listForPlace(placeId: String): List<GeoRuleRecord>
+
     @Query("UPDATE geo_rule SET enabled = :enabled, updated_at = :updatedAt WHERE id = :id")
     suspend fun setEnabled(id: String, enabled: Boolean, updatedAt: Instant)
 

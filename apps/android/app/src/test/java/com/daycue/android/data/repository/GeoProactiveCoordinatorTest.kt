@@ -379,7 +379,7 @@ class GeoProactiveCoordinatorTest {
         // 用户新增了一条规则。
         h.rules.rules = listOf(rule())
 
-        val plan = h.coordinator.onRuleChanged()
+        val plan = h.coordinator.onRuleChanged(now)
 
         assertTrue("新增规则后必须注册对应围栏", h.source.started.flatten().map { it.id }.contains("p1"))
         assertTrue(plan.readiness.single().isActive)
@@ -400,7 +400,7 @@ class GeoProactiveCoordinatorTest {
             ),
         )
 
-        h.coordinator.onRulesRemoved(listOf("r1"))
+        h.coordinator.onRulesRemoved(listOf("r1"), now)
 
         // 只取消围栏是不够的：几分钟后那条已经排上的提醒照样会响，用户会以为删除没生效。
         assertEquals(1, h.notifier.cancelled.size)

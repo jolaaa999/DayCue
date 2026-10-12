@@ -3,6 +3,9 @@ package com.daycue.android
 import android.content.Context
 import com.daycue.android.data.local.DayCueDatabase
 import com.daycue.android.data.repository.CaptureRepository
+import com.daycue.android.data.repository.DeviceRegistrar
+import com.daycue.android.data.repository.DeviceReportService
+import com.daycue.android.data.repository.DeviceZoneProvider
 import com.daycue.android.data.repository.FollowUpRepository
 import com.daycue.android.data.repository.GeoProactiveCoordinator
 import com.daycue.android.data.repository.MemoryRepository
@@ -17,21 +20,27 @@ import com.daycue.android.data.repository.SystemTimeSource
 import com.daycue.android.data.repository.TaskRepository
 import com.daycue.android.data.repository.TimeSource
 import com.daycue.android.network.DayCueApiClient
+import com.daycue.android.core.DayCueId
+import com.daycue.android.platform.capability.AndroidDeviceCapabilitySnapshot
 import com.daycue.android.platform.capability.CapabilityReport
 import com.daycue.android.platform.capability.CapabilityProbe
 import com.daycue.android.platform.media.AudioRecorder
 import com.daycue.android.domain.location.LocationRuleSwitch
 import com.daycue.android.platform.location.AndroidLocationEventSource
+import com.daycue.android.platform.location.LocationCapabilityProbe
 import com.daycue.android.platform.location.SharedPrefsGeoRuleSwitchMemory
 import com.daycue.android.platform.media.MediaStore
 import com.daycue.android.platform.notify.AndroidGeoNotifier
 import com.daycue.android.platform.notify.ReminderScheduler
 import com.daycue.android.platform.security.TokenStore
 import com.daycue.android.platform.work.DayCueWorkScheduler
+import com.daycue.android.ui.place.LocationPicker
+import com.daycue.android.ui.place.PlaceCatalog
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
 
 /**
  * 手写依赖容器。
@@ -45,6 +54,32 @@ import kotlinx.coroutines.launch
 class AppContainer(context: Context) {
 
     private val appContext: Context = context.applicationContext
+
+    /**
+     * 只给「必须由 Activity 发起」的事情用：申请运行时权限需要 Context，
+     * 而权限只能在界面层申请。业务代码请直接用对应的仓储或平台能力，不要从这里取 Context。
+     */
+    val context: Context get() = appContext
+
+    // ---- 内存副本（必须在 init 之前声明：Kotlin 不允许在声明之前使用属性） ----
+
+    @Volatile
+    private var cachedBaseUrl: String? = null
+
+    @Volatile
+    private var cachedOfflineMode: Boolean = false
+
+    /** 设备 id 的内存副本，见 init 里的说明。 */
+    @Volatile
+    private var cachedDeviceId: String? = null
+
+    /**
+     * 设备时区的唯一取值口。
+     *
+     * DayCueApiClient 的请求头与设备上报共用它，两处不会各取一个值：
+     * 分开取会出现「body 说上海、header 说柏林」这种自己跟自己矛盾的上报。
+     */
+    private val deviceZoneProvider = DeviceZoneProvider { java.time.ZoneId.systemDefault() }
 
     val database: DayCueDatabase = DayCueDatabase.build(appContext)
 
@@ -147,26 +182,46 @@ class AppContainer(context: Context) {
     /** 通知交互回执的落库：地点提醒与课后追问共用同一份状态映射，避免两条路径各写一套。 */
     val receiptService = ProactiveReceiptService(proactiveRepository, timeSource)
 
+    /**
+     * 界面读「当前位置」的实现：直接读系统最近一次已知定位。
+     *
+     * 拿不到就返回 null（权限被拒 / 系统定位关闭 / 从没有过定位），
+     * 由界面明确提示而不是填一个默认点——见 LocationPicker 的注释。
+     */
+    val locationPicker: LocationPicker = LocationPicker {
+        LocationCapabilityProbe.lastFix(appContext)?.point
+    }
+
+    /** 地点界面需要的地点 / 规则 / 任务 / 能力读取口。 */
+    val placeCatalog: PlaceCatalog = object : PlaceCatalog {
+        override fun places() = placeRepository.observePlaces()
+
+        override fun rules() = placeRepository.observeRules()
+
+        override fun tasks() = taskRepository.observeOpen()
+
+        override suspend fun capability() = LocationCapabilityProbe.availability(appContext)
+
+        override suspend fun locationRulesEnabled() = settingsRepository.locationRulesEnabled()
+    }
+
     // ---- 网络 ----
 
     /**
-     * 后端地址与离线开关在内存里留一份副本。
+     * 后端地址与离线开关在内存里留一份副本（字段声明在类顶部）。
      *
      * 因为 DayCueApiClient 的 provider 是普通 lambda（不是 suspend），
      * 不能每次发请求都去查数据库；同时又必须让用户在设置页改完地址后立刻生效，
      * 所以用 Room 的 Flow 订阅来同步这份副本。
      */
-    @Volatile
-    private var cachedBaseUrl: String? = null
-
-    @Volatile
-    private var cachedOfflineMode: Boolean = false
-
     val apiClient: DayCueApiClient = DayCueApiClient(
         // 用户打开离线开关时直接当作「没有后端」：宁可在界面里明确说没联网，
         // 也不要一边写着离线一边偷偷发请求。
         baseUrlProvider = { if (cachedOfflineMode) null else cachedBaseUrl },
         tokenProvider = { tokenStore.read() },
+        // 每个请求都带本机 IANA 时区：服务端据此维护「用户现在按哪个时区生活」，
+        // 预算重置与静默时段都按它算。现读一次而不是缓存，跨时区旅行才不会错位。
+        timezoneProvider = { deviceZoneProvider.zoneId().id },
     )
 
     init {
@@ -176,7 +231,35 @@ class AppContainer(context: Context) {
         applicationScope.launch {
             settingsRepository.observeOfflineMode().collect { cachedOfflineMode = it }
         }
+        // 设备 id 必须在上报之前就绪，所以这里同步读一次（Room 默认禁止主线程查询，所以走 IO）。
+        // 放在异步收集里会有一个真实竞态：启动时的上报可能拿到 null，
+        // 结果服务端为这台设备新生成一个 id，而本地之后一直用另一个——推送与能力上报就此分叉。
+        cachedDeviceId = runBlocking(Dispatchers.IO) {
+            val existing = settingsRepository.deviceId()
+            if (existing != null) {
+                existing
+            } else {
+                val created = "dev_" + DayCueId.new().replace("-", "").lowercase()
+                settingsRepository.setDeviceId(created)
+                created
+            }
+        }
     }
+
+    // ---- 设备上报 ----
+
+    /**
+     * 设备登记 / 能力上报（POST /v1/devices）。
+     *
+     * 时区走 ZoneId.systemDefault()：这里是设备级时区，不是某条记录的时区，
+     * 所以每次上报都现读一次——用户改系统时区之后，下一次上报就会带上新值。
+     */
+    val deviceReportService = DeviceReportService(
+        registrar = DeviceRegistrar { request -> apiClient.upsertDevice(request) },
+        capabilities = AndroidDeviceCapabilitySnapshot(appContext),
+        zones = deviceZoneProvider,
+        deviceIdProvider = { cachedDeviceId },
+    )
 
     /** 是否处于纯本地模式（未配置后端，或用户显式离线）。界面据此决定「先落库」之后提示什么。 */
     fun isPurelyLocal(): Boolean = cachedOfflineMode || cachedBaseUrl.isNullOrBlank()

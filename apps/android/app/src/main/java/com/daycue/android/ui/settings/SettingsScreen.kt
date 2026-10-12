@@ -43,9 +43,14 @@ import com.daycue.android.ui.rememberContainer
  *
  * 权限那一块是这一页的重点：每一项都写清楚「被拒绝之后会怎样」，
  * 因为用户拒绝权限时真正想知道的是后果，而不是权限的名字。
+ *
+ * onOpenPlaces 是「地点与规则」管理页的入口：总开关只决定要不要评估规则，
+ * 真正的规则必须有一个能进去管理的地方，否则这个开关打开之后用户无事可做。
  */
 @Composable
-fun SettingsScreen() {
+fun SettingsScreen(
+    onOpenPlaces: () -> Unit = {},
+) {
     val container = rememberContainer()
     val context = LocalContext.current
     val viewModel: SettingsViewModel = viewModel(factory = remember(container) { SettingsViewModel.factory(container) })
@@ -199,6 +204,19 @@ fun SettingsScreen() {
                         enabled = state.locationUsable,
                         onCheckedChange = viewModel::setLocationRulesEnabled,
                     )
+                }
+            }
+            item {
+                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth().padding(top = 4.dp)) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text("地点与规则", style = MaterialTheme.typography.bodyLarge)
+                        Text(
+                            text = "管理地点、半径与触发规则；每条规则会显示当前会不会触发、为什么",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    OutlinedButton(onClick = onOpenPlaces) { Text("进入") }
                 }
             }
 

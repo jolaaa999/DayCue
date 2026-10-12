@@ -272,6 +272,24 @@ enum class MemorySourceKind(val raw: String, val displayName: String) {
 
 // ---------------- 地点与主动消息 ----------------
 
+/**
+ * 地点坐标的坐标系。
+ *
+ * 为什么必须显式存而不是默认当作一种：Android 的 LocationManager 给的是 WGS84，
+ * 而高德 / 腾讯地图在中国境内返回的是 GCJ-02 偏移坐标（两者在同一地点能差几百米）。
+ * 只存经纬度不存坐标系，换一个取点来源就会让围栏整体偏移，而这种错误在界面上完全看不出来。
+ */
+enum class CoordinateSystem(val raw: String, val displayName: String) {
+    WGS84("wgs84", "WGS84（GPS 原始坐标）"),
+    ;
+
+    companion object {
+        /** 库里可能存着别的值（将来接入 GCJ-02）；解析不出来时按 WGS84 处理并保留原始字符串。 */
+        fun fromRawOrDefault(raw: String): CoordinateSystem =
+            entries.firstOrNull { it.raw == raw } ?: WGS84
+    }
+}
+
 enum class PlaceTrigger(val raw: String, val displayName: String) {
     ENTER("enter", "进入时"),
     EXIT("exit", "离开时"),

@@ -58,7 +58,7 @@ class GeoProactiveCoordinator(
     private val ruleSwitch: LocationRuleSwitch,
     private val switchMemory: GeoRuleSwitchMemory,
     private val timeSource: TimeSource = SystemTimeSource,
-) {
+) : GeoRuleChangeListener {
 
     /**
      * 处理一条原始观测。
@@ -223,8 +223,12 @@ class GeoProactiveCoordinator(
     }
 
     /** 规则或地点变化后的重新注册。与 refreshRegistration 同一入口，单独命名是为了让调用点读起来是意图。 */
-    suspend fun onRuleChanged(now: Instant = timeSource.now()): GeoRegistrationPlan =
-        refreshRegistration(now = now)
+    override suspend fun onRuleChanged() {
+        refreshRegistration()
+    }
+
+    /** 显式给出时刻的版本：测试用它拿到确定结论，界面走无参的那个。 */
+    suspend fun onRuleChanged(now: Instant): GeoRegistrationPlan = refreshRegistration(now = now)
 
     /**
      * 规则被删除后的收尾：取消它还没发出的通知，再重新注册。
@@ -232,7 +236,12 @@ class GeoProactiveCoordinator(
      * 只取消围栏而不取消已排的通知是不够的——用户删了规则，几分钟后仍然收到那条提醒，
      * 会让人以为删除没生效。
      */
-    suspend fun onRulesRemoved(ruleIds: List<String>, now: Instant = timeSource.now()): GeoRegistrationPlan {
+    override suspend fun onRulesRemoved(ruleIds: List<String>) {
+        onRulesRemoved(ruleIds, timeSource.now())
+    }
+
+    /** 显式给出时刻的版本：界面走接口，测试与内部调用用这个。 */
+    suspend fun onRulesRemoved(ruleIds: List<String>, now: Instant): GeoRegistrationPlan {
         for (ruleId in ruleIds) {
             for (row in ledger.pendingForRule(ruleId)) {
                 notifier.cancel(ProactiveNotificationIdentifier.identifierFor(row.dedupeKey))

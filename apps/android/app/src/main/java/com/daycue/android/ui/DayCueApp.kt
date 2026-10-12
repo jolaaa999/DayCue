@@ -21,6 +21,9 @@ import com.daycue.android.ui.followup.FollowUpScreen
 import com.daycue.android.ui.memory.MemoryScreen
 import com.daycue.android.ui.note.NoteDetailScreen
 import com.daycue.android.ui.note.NoteListScreen
+import com.daycue.android.ui.place.PlaceEditScreen
+import com.daycue.android.ui.place.PlaceListScreen
+import com.daycue.android.ui.place.RuleEditScreen
 import com.daycue.android.ui.schedule.CourseEditScreen
 import com.daycue.android.ui.schedule.IcsImportScreen
 import com.daycue.android.ui.schedule.ScheduleWeekScreen
@@ -49,13 +52,29 @@ object DayCueRoutes {
 
     const val NOTE_DETAIL = "note/{noteId}"
     const val COURSE_EDIT = "course/{courseId}"
+    const val PLACE_LIST = "places"
+    const val PLACE_EDIT = "place/{placeId}"
+    const val RULE_EDIT = "place/{placeId}/rule/{ruleId}"
 
     /** 新建课程复用同一条路由；用它而不是空串，是为了让 route 匹配与日志都还能读。 */
     const val COURSE_ID_NEW = "__new__"
 
+    /**
+     * 新建地点 / 新建规则也复用同一条路由。
+     *
+     * 用 "__new__" 而不是直接拼空串：NavController 的 route 匹配把空段当成分隔符，
+     * "place//rule/" 这类路径既难读又容易匹配到别的路由。
+     */
+    const val ID_NEW = "__new__"
+
     fun noteDetail(noteId: String): String = "note/" + noteId
 
     fun courseEdit(courseId: String): String = "course/" + courseId
+
+    fun placeEdit(placeId: String?): String = "place/" + (placeId ?: ID_NEW)
+
+    fun ruleEdit(placeId: String, ruleId: String?): String =
+        "place/" + placeId + "/rule/" + (ruleId ?: ID_NEW)
 }
 
 /** 底栏入口。mark 用单个汉字代替图标：少引一个 material-icons 依赖，也避免了图标语义不敢翻译的问题。 */
@@ -135,11 +154,52 @@ fun DayCueApp() {
                 }
 
                 composable(DayCueRoutes.SETTINGS) {
-                    SettingsScreen()
+                    SettingsScreen(
+                        onOpenPlaces = { navController.navigate(DayCueRoutes.PLACE_LIST) },
+                    )
                 }
 
                 composable(DayCueRoutes.CAPTURE) {
                     CaptureScreen(onBack = { navController.popBackStack() })
+                }
+
+                composable(DayCueRoutes.PLACE_LIST) {
+                    PlaceListScreen(
+                        onBack = { navController.popBackStack() },
+                        onEditPlace = { placeId -> navController.navigate(DayCueRoutes.placeEdit(placeId)) },
+                        onEditRule = { placeId, ruleId ->
+                            navController.navigate(DayCueRoutes.ruleEdit(placeId, ruleId))
+                        },
+                    )
+                }
+
+                composable(
+                    route = DayCueRoutes.PLACE_EDIT,
+                    arguments = listOf(navArgument("placeId") { type = NavType.StringType }),
+                ) { entry ->
+                    val raw = entry.arguments?.getString("placeId").orEmpty()
+                    PlaceEditScreen(
+                        placeId = raw.takeIf { it.isNotEmpty() && it != DayCueRoutes.ID_NEW },
+                        onBack = { navController.popBackStack() },
+                        // 保存成功后回到列表：用户在这里刚改了围栏，下一步多半是加规则看结果。
+                        onSaved = { navController.popBackStack() },
+                    )
+                }
+
+                composable(
+                    route = DayCueRoutes.RULE_EDIT,
+                    arguments = listOf(
+                        navArgument("placeId") { type = NavType.StringType },
+                        navArgument("ruleId") { type = NavType.StringType },
+                    ),
+                ) { entry ->
+                    val placeId = entry.arguments?.getString("placeId").orEmpty()
+                    val rawRuleId = entry.arguments?.getString("ruleId").orEmpty()
+                    RuleEditScreen(
+                        placeId = placeId,
+                        ruleId = rawRuleId.takeIf { it.isNotEmpty() && it != DayCueRoutes.ID_NEW },
+                        onBack = { navController.popBackStack() },
+                    )
                 }
 
                 composable(DayCueRoutes.TASKS) {

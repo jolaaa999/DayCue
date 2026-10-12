@@ -5,6 +5,7 @@ import androidx.room.Entity
 import androidx.room.ForeignKey
 import androidx.room.Index
 import androidx.room.PrimaryKey
+import com.daycue.android.domain.model.CoordinateSystem
 import com.daycue.android.domain.model.PlaceTrigger
 import com.daycue.android.domain.model.ProactiveKind
 import com.daycue.android.domain.model.ProactiveState
@@ -27,6 +28,15 @@ data class PlaceRecord(
     @ColumnInfo(name = "longitude") val longitude: Double,
     @ColumnInfo(name = "radius_meters") val radiusMeters: Double,
     @ColumnInfo(name = "address") val address: String? = null,
+    /**
+     * 坐标的坐标系。
+     *
+     * 建表默认值写 wgs84：Android 的 LocationManager 给的就是 WGS84，v2 时代存下的行也只有这一种可能。
+     * 但新建地点时仓储要求显式传入（不依赖默认值），因为一旦接入 GCJ-02 取点来源，
+     * 「忘了传」和「确实是 WGS84」在库里会长得一模一样。
+     */
+    @ColumnInfo(name = "coordinate_system", defaultValue = "wgs84")
+    val coordinateSystem: CoordinateSystem = CoordinateSystem.WGS84,
     @ColumnInfo(name = "confirmed_by_user") val confirmedByUser: Boolean = false,
     @ColumnInfo(name = "created_at") val createdAt: Instant,
     @ColumnInfo(name = "updated_at") val updatedAt: Instant,
@@ -44,7 +54,7 @@ data class PlaceRecord(
             onDelete = ForeignKey.CASCADE,
         ),
     ],
-    indices = [Index(value = ["place_id"]), Index(value = ["enabled"])],
+    indices = [Index(value = ["place_id"]), Index(value = ["enabled"]), Index(value = ["linked_task_id"])],
 )
 data class GeoRuleRecord(
     @PrimaryKey @ColumnInfo(name = "id") val id: String,
@@ -59,6 +69,15 @@ data class GeoRuleRecord(
     /** 生效星期，JSON 数组，取值 1..7；空集合表示每天都生效。 */
     @ColumnInfo(name = "weekdays") val weekdays: List<Int> = emptyList(),
     @ColumnInfo(name = "enabled") val enabled: Boolean = true,
+    /**
+     * 触发时指向的具体任务（可空）。
+     *
+     * 刻意不加 FOREIGN KEY：任务在 App 里是软删除（deleted_at），物理行会一直留着，
+     * 外键约束带不来任何保护，却会让 MIGRATION_2_3 的 ADD COLUMN 必须写出 Room 认识的外键子句，
+     * 写错就是真机升级时抛「Migration didn't properly handle」。
+     * 引用完整性由仓储层保证：删任务不删规则，规则只是不再指向任何任务。
+     */
+    @ColumnInfo(name = "linked_task_id") val linkedTaskId: String? = null,
     @ColumnInfo(name = "expires_at_utc") val expiresAtUtc: Instant? = null,
     @ColumnInfo(name = "created_at") val createdAt: Instant,
     @ColumnInfo(name = "updated_at") val updatedAt: Instant,

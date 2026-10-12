@@ -1,7 +1,8 @@
 # DayCue Android 客户端
 
 DayCue 的 Android 客户端，Kotlin + Jetpack Compose + Room。
-数据模型与 HTTP 契约对齐 iOS 端（apps/ios/Sources/DayCueCore/Schema.swift 的 v2 段、contracts/v1/*.schema.json）。
+数据模型与 HTTP 契约对齐 iOS 端（apps/ios/Sources/DayCueCore/Schema.swift、contracts/v1/*.schema.json），
+Android 侧本地库版本已走到 v3（比 iOS 多 place.coordinate_system 与 geo_rule.linked_task_id 两列）。
 
 ## 当前状态：已构建并通过单元测试，但未在设备上运行
 
@@ -12,16 +13,17 @@ DayCue 的 Android 客户端，Kotlin + Jetpack Compose + Room。
 
 - 产物 `app/build/outputs/apk/debug/app-debug.apk`（约 11.8 MB）。
 - **174 个 JVM 单元测试全部通过，0 失败 0 错误 0 跳过**（15 个测试类）。
-- Room schema 已由 KSP 导出到 `app/schemas/com.daycue.android.data.local.DayCueDatabase/2.json`，
-  并已入库；它不是手工编写的文件。
+- Room schema 已由 KSP 导出到 `app/schemas/com.daycue.android.data.local.DayCueDatabase/`，
+  **2.json 与 3.json 都已入库**且都不是手工编写的文件：
+  2.json 是 MIGRATION_2_3 的升级起点，3.json 是当前版本（漂移守卫与设备迁移测试都读它）。
 - Gradle Wrapper（含 `gradle-wrapper.jar`）已入库，**不需要**先装 Gradle。
 
 **仍然未验证的部分**（不要把它们当成已通过）：
 
 - **没有任何真机或模拟器跑过这个 APK。** 通知弹窗、后台作业调度（WorkManager）、
   定位、录音、精确闹钟在真实系统上的行为全部未验证。
-- `src/androidTest/` 里的 DAO 测试需要设备，本机未执行；
-  `MIGRATION_1_2` 的迁移正确性同样只能在那时验证。
+- `src/androidTest/` 里的 DAO 测试与迁移测试需要设备，本机未执行；
+  `MIGRATION_1_2` / `MIGRATION_2_3` 的迁移正确性同样只能在那时验证。
 - 「能编译 + 单元测试通过」≠「功能可用」。前者是构建证据，后者要设备验收。
 
 ## 目录结构
@@ -35,7 +37,7 @@ DayCue 的 Android 客户端，Kotlin + Jetpack Compose + Room。
       app/
         build.gradle.kts            android/kotlin/compose/serialization/ksp 插件与依赖
         proguard-rules.pro          kotlinx.serialization / OkHttp / WorkManager 保留规则
-        schemas/                    Room 导出的 schema（已生成 2.json 并入库）
+        schemas/                    Room 导出的 schema（2.json 与 3.json 均已入库）
         src/main/AndroidManifest.xml 权限与组件声明（每条权限都有降级路径）
         src/main/res/               字符串、主题、图标、备份规则
         src/main/java/com/daycue/android/
@@ -49,6 +51,7 @@ DayCue 的 Android 客户端，Kotlin + Jetpack Compose + Room。
           platform/                 平台适配：通知、作业、定位、媒体、权限、安全
           network/                  HTTP 客户端与传输抽象
           ui/                       Compose 界面与 ViewModel
+            place/                  地点与规则管理（列表 / 地点编辑 / 规则编辑）
         src/test/                   JVM 单元测试（不需要设备）
         src/androidTest/            需要设备/模拟器的 DAO 测试（本机未执行）
 
@@ -71,7 +74,8 @@ DayCue 的 Android 客户端，Kotlin + Jetpack Compose + Room。
 
 构建产物：
 
-- `app/schemas/2.json`：Room 导出的 schema，是迁移测试的输入。**没有它就是后续改表没有比对基准。**
+- `app/schemas/*.json`：Room 导出的各版本 schema，是迁移测试的输入。
+  **没有它就没有历史版本的比对基准**，所以每次改表都要把新导出的那一份一起入库。
 - `app/build/`：不要在仓库里提交（已在 .gitignore 中）。
 
 ## 分层与依赖方向
@@ -102,9 +106,23 @@ DayCue 的 Android 客户端，Kotlin + Jetpack Compose + Room。
 - 列表型字段存 JSON 文本（excluded_dates、weekdays 等）。
 - 软删除统一用 `deleted_at`；查询默认过滤。
 
-数据库版本是 2，带 `MIGRATION_1_2`，**没有** `fallbackToDestructiveMigration`。
+数据库版本是 **3**，带 `MIGRATION_1_2` 与 `MIGRATION_2_3`，**没有** `fallbackToDestructiveMigration`。
 理由：用户的手写笔记与课表不能被一次升级清空。Android 端从未发布过 v1，
-所以 1→2 的 DDL 没有在真实设备上验证过，必须用 `MigrationTestHelper` + `app/schemas/2.json` 补一次验证。
+所以 1→2 的 DDL 没有在真实设备上验证过。
+
+v3 的两列是有意加上去的：
+
+- `place.coordinate_system`：记录坐标系，建表默认 `wgs84`。
+  Android 的 LocationManager 给的就是 WGS84，但高德 / 腾讯地图在中国境内返回 GCJ-02 偏移坐标，
+  同一地点两者能差几百米。只存经纬度不存坐标系，换一个取点来源就会让围栏整体偏移且完全看不出来。
+  新建地点时仓储**要求显式传入**坐标系，不靠默认值掩盖「调用方忘了传」。
+- `geo_rule.linked_task_id`：规则触发时指向的具体任务（可空）。
+  刻意不加外键：任务在 App 里是软删除（行一直在），外键带不来保护，
+  却会让 ADD COLUMN 必须写出 Room 认识的外键子句，写错就是真机升级时抛异常。
+
+两列都用 `ALTER TABLE ... ADD COLUMN` 加，v2 时代的数据（如果有）不会被重建表洗掉。
+`MigrationSchemaDriftTest` 同时读 CREATE TABLE 与 ALTER TABLE ADD COLUMN 两类语句，
+少了后者会把「用 ADD COLUMN 加列」误判成漏列。
 
 ## 领域逻辑（纯函数，全部有单元测试）
 
@@ -127,17 +145,57 @@ DayCue 的 Android 客户端，Kotlin + Jetpack Compose + Room。
 | 精确闹钟 | 降级为 `setWindow` 的不精确提醒（分钟级误差），并在通知与设置页明确告知 |
 | 录音权限 | 文字记录照常；录音入口提示需要权限 |
 | 相机权限 | 改用系统图片选择器选已有图片 |
-| 定位 | 地点规则整体禁用并说明原因，**不伪造位置、不使用陈旧位置** |
+| 定位 | 地点规则整体禁用并说明原因，**不伪造位置、不使用陈旧位置**；地点界面拒绝保存「没有位置」的地点 |
 | 后端未配置 | 纯本地模式：记录照常落库，界面提示「已保存到本机，未配置后端」 |
 | 无 GMS 设备 | 平台 `LocationManager` 可用；GMS Fused 提供方是可选增强，依赖默认注释掉 |
 
 WorkManager 只用于「不要求准点」的两件事：outbox 重试与课表/追问刷新。
 到点提醒走 `AlarmManager`——用 WorkManager 冒充精确提醒会违反设计约束。
 
+## 地点与规则管理界面
+
+`ui/place/` 是这一整条链路的用户入口，从「设置 → 地点与规则 → 进入」可达：
+
+- `PlaceListScreen`：地点名、半径、地址、坐标系、该地点下的规则数与每条规则的触发条件 / 开关，
+  以及每条规则**当前会不会触发、为什么**（结论来自 `GeoRuleReadinessEvaluator`，与系统实际判定同一口径）。
+  删除地点与删除规则都要二次确认，确认框里写明会连带取消哪些已排提醒。
+- `PlaceEditScreen`：名称、半径、地址、坐标系展示，以及位置选择。
+- `RuleEditScreen`：触发条件（进入 / 离开 / 停留）、标题、正文、最短停留秒数、
+  冷却秒数、生效星期、生效时段、过期日期、关联任务、启用开关。
+
+两条硬约束：
+
+1. **位置必须由用户给出**。可以点「使用当前位置」读一次系统最近一次已知定位
+   （`LocationCapabilityProbe.lastFix`，注意权限与可能为 null），也可以手工输入经纬度；
+   两种方式都没有时保存会被拒绝，并说明「还没有位置」。
+   读不到位置时明确报错，**绝不静默填一个默认点**——静默填点的结果是围栏挂在别处而用户完全看不出来。
+   经纬度范围校验 -90..90 / -180..180，半径必须大于 0，全部在仓储里再校验一次。
+2. **任何保存 / 删除 / 开关之后都要通知围栏链路**：
+   保存与开关走 `GeoProactiveCoordinator.onRuleChanged()`，
+   删除规则走 `onRulesRemoved(ruleIds)`（它会取消这些规则已经排上的通知，再重新对账注册）。
+   界面通过窄接口 `GeoRuleChangeListener` 调用，所以「保存后真的调了」这件事能在 JVM 单测里断言。
+
+定位能力不可用时，界面显示的是「这条规则会被暂停，等定位恢复后自动启用」，
+而不是把它显示成正常运行；新建的规则会被落成 `enabled=0` 并写明暂停原因。
+
 ## 与后端的契约
 
 契约以 `contracts/v1/*.schema.json` 为准，Kotlin 侧镜像在 `domain/contract/Contract.kt`。
 客户端只消费，不定义契约。请求头与 iOS 一致（`X-DayCue-Client`、`Accept`、`Authorization: Bearer`）。
+
+**IANA 时区**跟着每个请求走：`DayCueApiClient.buildHeaders` 给所有请求加
+`X-DayCue-Timezone: <ZoneId.systemDefault().id>`，每次现读（用户改系统时区、跨时区旅行之后立刻生效）。
+之所以放在请求头而不是请求体：服务端在每个已鉴权请求路径上都读它并更新用户时区
+（`account.go` 的 `syncReportedTimeZone`），只覆盖设备登记那一条请求是不够的——
+用户可能几个月都不触发一次设备登记。客户端与服务端用的是同一个头名，写错不会报错，
+只会让服务端一直看到「没有时区」，所以头名只在 `DayCueApiClient` 里定义一次。
+
+设备登记（`POST /v1/devices`）在启动时做一次（`DeviceReportService`），请求体里带：
+本机设备 id（客户端生成并持久化，生成后落库；重试是同一个 id 的 upsert，
+否则服务端会留下第二台「幽灵设备」）与能力映射
+（`notifications` / `precise_location` / `calendar_write` / `speech_transcription`，
+**未知的能力直接省略而不是填 false**，服务端把「键存在」当作已确认）。
+纯本地模式（未配置后端 / 用户开了离线开关）不发这一步，也不发任何请求。
 
 离线优先：任何网络调用失败都不阻塞本地写入。outbox 里的操作带确定性幂等键
 （`create_reminder:<taskId>:<listId>` 等），重放安全；「结果未知」的操作用 UNKNOWN 状态而不是 FAILED，
@@ -145,16 +203,33 @@ WorkManager 只用于「不要求准点」的两件事：outbox 重试与课表/
 
 ## 测试
 
-- `app/src/test/`：**124** 条 JVM 单元测试，覆盖 core 与 domain 的全部纯逻辑，**不需要设备**：
-  DayCueTime(10)、IdempotencyKey(8)、CourseInstanceExpander(16)、IcsParser(15)、
-  FollowUpScheduler(16)、ProactiveBudget(12)、SyncReconciler(12)、ReminderOwnership(11)、
-  GeoRuleEvaluator(13)、ContractDecoding(11)。
-- `app/src/androidTest/`：**8** 条仪器测试，验证设备端约束（outbox 幂等键唯一、抢占只有一个赢家、
-  未知结果不当作可重试、follow_up 每节课唯一、课程实例重复展开幂等、软删除后行仍在、
-  日期型截止不得带 UTC、任务软删除不出现在待办列表），**需要设备或模拟器**。
-- 迁移测试（MigrationTestHelper）**尚未编写**：它依赖构建后生成的 `app/schemas/2.json`，本机没有 SDK 无法生成。
+最近一次真实执行（Windows + JDK 17）：
 
-本机没有跑过其中任何一条。 `./gradlew :app:testDebugUnitTest` 是它们的第一次真实执行。
+    gradlew.bat --no-daemon --console=plain :app:assembleDebug :app:testDebugUnitTest :app:assembleDebugAndroidTest
+    # BUILD SUCCESSFUL in 32s
+    # 217 tests completed, 0 failed（20 个测试类）
+
+- `app/src/test/`：**217** 条 JVM 单元测试（20 个类），**不需要设备**：
+  DayCueTime(10)、IdempotencyKey(8)、MigrationSchemaDrift(3)、DeviceReportService(6)、
+  GeoProactiveCoordinator(14)、ProactiveReceiptService(6)、TaskRepositoryOutboxEnqueue(12)、
+  ContractDecoding(11)、FollowUpScheduler(16)、GeoRuleEvaluator(13)、ProactiveBudget(12)、
+  ReminderOwnership(11)、CourseInstanceExpander(16)、IcsParser(15)、SyncReconciler(12)、
+  AppOutboxExecutor(5)、InAppTodoReminderHandler(8)、OutboxProcessor(19)、OutboxRetryPolicy(6)、
+  **PlaceViewModel(14)**。
+- 其中与本轮地点界面直接相关的两类：
+  - `PlaceViewModelTest`：没有位置时保存被拒绝、半径 / 经纬度非法被拒绝、
+    读不到位置时明确报错且不填默认坐标、保存后真的调用了 `onRuleChanged`、
+    删除规则后真的调用了 `onRulesRemoved`、编辑时复用既有 ruleId（并保留 createdAt）、
+    非停留条件的最短停留置 0、关联任务落库、定位不可用时落成暂停。
+  - `DeviceReportServiceTest`：每个请求都带 `X-DayCue-Timezone` 且每次现读（改系统时区后立刻生效）、
+    设备登记带设备 id 与能力、未知能力省略而不是填 false、失败返回 Result.failure。
+- `app/src/androidTest/`：**11** 条仪器测试，验证设备端约束（outbox 幂等键唯一、抢占只有一个赢家、
+  未知结果不当作可重试、follow_up 每节课唯一、课程实例重复展开幂等、软删除后行仍在、
+  日期型截止不得带 UTC、任务软删除不出现在待办列表、`2.json` 能被 Room 打开、
+  `MIGRATION_1_2` 可重复执行），**需要设备或模拟器**，本机**从未运行过**。
+- 迁移验证分两层：JVM 的 `MigrationSchemaDriftTest` 比对「迁移 DDL 的列集合」与「Room 导出的 schema」；
+  真机侧 `MigrationTest` 用 `MigrationTestHelper.runMigrationsAndValidate` 让 Room 亲自校验
+  `MIGRATION_2_3` 的结果（NOT NULL / DEFAULT / 索引这些只在真库上才看得见）。
 
 ## 已知限制
 
@@ -176,5 +251,10 @@ WorkManager 只用于「不要求准点」的两件事：outbox 重试与课表/
 11. 记忆页没有「按来源类别关闭记忆写入」的开关：设置层没有这个键，而一个不会真正生效的开关
     比没有开关更糟（用户会以为关掉之后系统真的不记了）。页面改为**如实展示**三种来源的处理方式：
     用户表述/用户设置记为事实，系统推断只作为待确认候选。
-12. 仪器测试里没有迁移测试：它需要构建后生成的 `app/schemas/2.json`，本机没有 SDK 无法生成。
-    这是**接手后第一件该补的测试**，因为 MIGRATION_1_2 的 DDL 从未在真实设备上跑过。
+12. 仪器测试仍然**从未在设备上执行过**（本机没有模拟器/真机）。`MIGRATION_2_3` 与
+    `runMigrationsAndValidate` 那条用例只保证能编译，没有真机证据。
+13. 地点界面不做地图选点（本项目不引入地图 SDK）。位置的两个来源是「使用当前位置」与手工输入经纬度；
+    没有第三个来源，也不会替用户填一个默认点。
+14. 地点规则仍然只在 App 被打开时评估（见第 9 条），所以「进入某地自动提醒」在 App 未打开时不会触发。
+15. 设备上报只在**启动时**做一次，没有周期性重试：权限在本次运行中被用户改掉之后，
+    要等下一次冷启动才会同步到服务端。
