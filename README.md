@@ -8,11 +8,11 @@
 
 | 部分 | 状态 |
 |---|---|
-| Go 后端 `services/api` | **已实现、已编译、已测试**：124 个测试用例全部通过；另有 `verify-api.ps1` 的 23 项真实 HTTP 端到端断言 |
-| 契约 `contracts/` | 已落地，并由后端测试强制执行。**注意：账号 / 设备 / 同步 / 媒体 / 导出端点尚未写入 contracts** |
-| iOS 端 `apps/ios` | **源码已完成**：DayCueCore 44 个文件 + DayCueApp 43 个文件；测试 25 个文件 / **236 个用例，已运行 0 个**；**尚未编译、尚未真机验证** |
-| Android 端 `apps/android` | **源码已完成**：90 个 Kotlin 文件；JVM 单元测试 **124 个用例，已运行 0 个**；仪器测试 8 个待设备；**尚未编译**（本机缺 Android SDK 与 Gradle wrapper） |
-| 课表 / 课后追问 / 长期记忆 / 位置与主动规则 / 苹果侧对账 | **源码已完成**（iOS 与 Android 双端），均**未编译、未运行** |
+| Go 后端 `services/api` | **已实现、已编译、已测试**：**159 个测试用例全部通过**（含 6 条连真实 PostgreSQL 的集成测试）；另有 `verify-api.ps1` 的 23 项真实 HTTP 端到端断言 |
+| 契约 `contracts/` | 已落地，并由后端测试强制执行。`contracts/v1/` 共 **20 个 schema**，覆盖账号 / 设备 / 同步 push+pull / 媒体 / 导出 / 账号删除 / 主动候选与投递 |
+| iOS 端 `apps/ios` | **源码已完成**：DayCueCore 60 个文件 + DayCueApp 50 个文件；测试 32 个文件；**尚未编译、尚未真机验证**（本机无 macOS / Xcode / Swift 工具链），只跑过静态检查 |
+| Android 端 `apps/android` | **源码完成且已构建**：108 个 Kotlin 文件（main 91 / test 16 / androidTest 1）；`:app:assembleDebug` 产出 APK（约 11.8 MB），**174 个 JVM 用例全部通过、0 失败**；仪器测试待设备；**未在任何真机或模拟器上运行** |
+| 课表 / 课后追问 / 长期记忆 / 位置与主动规则 / 苹果侧对账 | **源码已完成**（iOS 与 Android 双端）；Android 侧已编译并跑过单元测试，**iOS 侧未编译、两端均未上真机** |
 
 iOS 端之所以未验证：开发环境是 Windows，没有 Xcode 与 Swift 工具链。按 Xcode 版本拼凑的"已验证"结论是不诚实的，因此这里明确标注为**未验证**，并在 [apps/ios/README.md](apps/ios/README.md) 给出了 Mac 上的完整构建与真机验证步骤。
 

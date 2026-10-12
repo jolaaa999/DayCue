@@ -55,7 +55,8 @@ private fun payloadOf(record: OutboxOperationRecord): Map<String, String> {
  * 生产入队点的编排测试。
  *
  * 这是**替身验证编排**，不是设备验收：用内存版 DAO/Store 断言"入队了什么载荷、走到哪个执行者"，
- * 真实 Room 写入与 WorkManager 唤醒不在本测试范围内（本机没有 Android SDK/Gradle，无法编译与运行）。
+ * 真实 Room 写入与 WorkManager 唤醒不在本测试范围内：那需要真机或模拟器（androidTest），
+ * 本机只跑 JVM 单元测试。本用例已在 `:app:testDebugUnitTest` 中真实执行并通过。
  */
 class TaskRepositoryOutboxEnqueueTest {
 
