@@ -200,22 +200,45 @@
 
 ### 后端接通情况（结论先说）
 
-本地起 `services/api`（`DAYCUE_LLM_*` 从 `scripts/.lan-secrets.json` 注入，未写进仓库），用 `adb reverse tcp:8787 tcp:8787` 让手机连本机：
+本地起 `services/api`（`DAYCUE_LLM_*` 从 `scripts/.lan-secrets.json` 注入环境变量，未落盘、未进日志），手机侧用 `adb reverse tcp:8787 tcp:8787` 连本机。
 
 | 检查项 | 结果 |
 | --- | --- |
 | `GET /v1/health` | 200，`providers:{asr:"absent", llm:"configured"}` |
 | 错令牌 | 401 `unauthorized`（令牌确实在生效） |
-| `POST /v1/extractions`（真实调用） | **通了 HTTP，但结果不可用**：供应商 `airelay.buzz` 的 `deepseek-v4.1-flash` 不按契约输出，返回的是 `{"intent":…,"remind_at":…}` 这种别的形状 |
-| `POST /v1/transcriptions` | 503 `service_unavailable`，**缺 `DAYCUE_ASR_BASE_URL` / `DAYCUE_ASR_API_KEY` / `DAYCUE_ASR_MODEL`** |
+| `POST /v1/extractions` | 200，`mode=live`，真实模型返回并可解析 |
+| `POST /v1/transcriptions` | 503 `service_unavailable`，缺 `DAYCUE_ASR_BASE_URL` / `DAYCUE_ASR_API_KEY` / `DAYCUE_ASR_MODEL` |
 
-顺手修了后端两处（都属于「不修就没法如实验收」）：
+**之前为什么解析失败（不是模型不行）**
 
-1. `newProactiveProducer` 在没有数据库时返回错误导致整个进程退出，与它自己注释里写的「没有数据库就明确不启动」矛盾；改成返回 nil（main 里本来就有判空）。
-2. `normalize.go` 把「合法 JSON 但没有 `items` 数组」当成「没有可整理的事项」。这会把用户明确写下的待办说成空内容，并且把记录标成已解析。现在这种情况返回 `model_output_invalid`（502），界面显示「AI 返回的内容无法解析为结构化候选。原始记录已保留，可稍后重试」。
-3. 补了 `TestNormalizeNonContractShapeIsError`，`go test ./...` 全绿。
+生产的 `/v1/extractions` 一直返回 0 候选，界面显示「没有可整理的明确事项」。逐层排查后定位到请求本身：
 
-**没有做的事（明确写出来）**：没有把供应商换成别的模型，也没有用 `DAYCUE_FIXTURE_MODE` 的样例当成功结果报给你。真实解析要能跑，需要换一个遵守 JSON 契约的模型或直连供应商；真实转写要能跑，需要上面三项 ASR 凭据。
+1. 生产请求是 `messages:[{role:"system",契约},{role:"user",原文+时间}]`，外加 `response_format:{type:"json_object"}`，`temperature:0`，无 `max_tokens`。
+2. 直接对同一个端点发同样两条消息，模型回的却是 `{"intent":"create_reminder","remind_at":"2026-10-28T20:00:00+08:00",…}`——**一个合法 JSON，但不是契约形状**。把同样内容拼成单条 user 消息再发，输出的就是 `{"items":[…],"warnings":[]}`。
+3. 结论：这个中转端点会把 **system 消息整条丢掉**，模型只看得到原文，于是按自己的默认模板作答；契约校验因此拿到「有 JSON 但没 items」。
+4. 端点能力实测（不假定）：`json_schema` 接受并遵守；`response_format` 去掉也能work；把 `max_tokens` 压到 40 会返回 `finish_reason:"length"` 且 content 为空——说明截断是可观察的，必须当失败而不是空候选。
+
+**修法（保留同一供应商）**
+
+- 把最小输出要求（顶层 `items` 数组、字段表、「不要自己算日期」）随**每条 user 消息**一起发出去，不再只依赖 system。
+- 严格校验不变：缺 `items`、元素缺必需字段、`finish_reason=length` 截断 → `model_output_invalid`（502），记录保留可重试；合法的 `items:[]` 仍然只是「没有事项」，两者分开。
+- 允许**一次**有界格式纠正：把上一轮的校验原因带回去再问一遍；仍不合格就报错，不无限重试。调用次数与各段耗时只写日志，不进响应体。
+- 没有换供应商、没有用 fixture 冒充成功。
+
+**真实输入核对**（`recorded_at=2026-10-27T08:20:00Z`，`Asia/Shanghai`，均 1 次上游调用）
+
+| 输入 | 结果 |
+| --- | --- |
+| 明晚八点提醒我复习操作系统 | 1 条 task，`due=2026-10-28T20:00+08:00`，带 remind |
+| 纯笔记（动态规划先写状态转移方程…老师说下周一小测） | 1 note + 1 task（下周一小测 → `2026-11-02`，标记 `deadline_only`） |
+| 笔记 + 两条任务（第四章树的遍历…周五前交实验报告；周三中午十二点前做完第三章习题） | 1 note + task（`2026-10-30` date 型）+ task（`2026-10-28T12:00` datetime 型） |
+| 下周找个时间复习操作系统 | 1 条 task，`due=none` + `unresolved_date`，没有编造日期 |
+
+**两种输入操作（保持分开）**
+
+- 「保存」：只落库，纯离线，不发任何请求。
+- 「提取待办」：输入框有字就先落库再解析；输入框已被保存清空时，用刚保存的那条记录的原文去解析。结果进确认页，勾选后才写 task / note。
+- 记一笔的三个入口（今天页麦克风/文字/拍照、记录页三个按钮）没被本轮改动取消，改动只在于「保存后不再自动联网解析」。
 
 ## 9. 截图证据
 
