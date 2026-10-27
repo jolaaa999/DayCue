@@ -3,6 +3,8 @@ package extract
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"log/slog"
 	"strings"
 	"time"
 
@@ -31,6 +33,12 @@ type modelOutput struct {
 }
 
 // Extract 调用供应商并做确定性归一化。
+//
+// 格式纠正最多重试一次：模型输出不是契约形状时，把校验原因带回去再问一遍。
+// 只重试一次的代价是可预期的（最多两次上游调用），换来的是中转类端点常见的
+// 「第一次输出形状跑偏、提示一句就对了」这类失败不再直接变成用户看到的报错。
+// 重试次数与各自耗时只进日志，不进响应体——契约里没有这两项，
+// 也不该让界面去关心服务端调用了几次。
 func Extract(ctx context.Context, req Request, p llm.Provider) (Response, error) {
 	recordedAt, err := req.RecordedTime()
 	if err != nil {
@@ -43,11 +51,65 @@ func Extract(ctx context.Context, req Request, p llm.Provider) (Response, error)
 
 	begin := time.Now()
 	out, err := p.Complete(ctx, SystemPrompt(), BuildUserMessage(req, recordedAt, loc))
-	latency := time.Since(begin).Milliseconds()
+	firstLatency := time.Since(begin).Milliseconds()
 	if err != nil {
 		return Response{}, err
 	}
-	return Normalize(out, req, recordedAt, loc, latency)
+
+	resp, normErr := Normalize(out, req, recordedAt, loc, firstLatency)
+	if normErr == nil {
+		slog.Info("解析完成",
+			"capture_id", req.CaptureID,
+			"attempts", 1,
+			"latency_ms", firstLatency,
+			"finish_reason", out.FinishReason,
+			"items", len(resp.Items),
+		)
+		return resp, nil
+	}
+	// 只有「模型输出不可结构化」值得再问一次；时间解析、时区非法等确定性失败重问也不会变。
+	if !errors.Is(normErr, ErrModelOutputInvalid) || ctx.Err() != nil {
+		return Response{}, normErr
+	}
+
+	reason := "顶层缺少 items 数组，或 items 里的元素缺少 kind/title/source_evidence 等必需字段"
+	if out.FinishReason == "length" {
+		// 被长度截断的输出同样是「不可用」，但要如实说清是截断而不是格式跑偏。
+		reason = "输出被长度限制截断，JSON 不完整"
+	}
+	slog.Warn("模型输出未通过契约校验，做一次格式纠正",
+		"capture_id", req.CaptureID,
+		"reason", reason,
+		"finish_reason", out.FinishReason,
+		"latency_ms", firstLatency,
+	)
+
+	repairBegin := time.Now()
+	repaired, repairErr := p.Complete(ctx, SystemPrompt(), BuildRepairMessage(req, recordedAt, loc, reason))
+	repairLatency := time.Since(repairBegin).Milliseconds()
+	if repairErr != nil {
+		return Response{}, repairErr
+	}
+	resp, normErr = Normalize(repaired, req, recordedAt, loc, repairLatency)
+	if normErr != nil {
+		slog.Error("格式纠正后仍不合格",
+			"capture_id", req.CaptureID,
+			"attempts", 2,
+			"first_latency_ms", firstLatency,
+			"repair_latency_ms", repairLatency,
+			"finish_reason", repaired.FinishReason,
+			"error", normErr.Error(),
+		)
+		return Response{}, normErr
+	}
+	slog.Info("格式纠正后解析成功",
+		"capture_id", req.CaptureID,
+		"attempts", 2,
+		"first_latency_ms", firstLatency,
+		"repair_latency_ms", repairLatency,
+		"items", len(resp.Items),
+	)
+	return resp, nil
 }
 
 // Normalize 把模型输出转成契约响应。任何一条候选的绝对时刻都在这里重算。

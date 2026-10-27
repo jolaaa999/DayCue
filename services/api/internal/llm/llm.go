@@ -25,6 +25,10 @@ type Result struct {
 	Model            string
 	PromptTokens     int
 	CompletionTokens int
+	// FinishReason 是上游给的结束原因（stop / length / …）。
+	// 拿到它才能区分「模型确实没输出内容」和「输出被长度截断」——
+	// 后者必须当成解析失败，而不是当成空候选。
+	FinishReason string
 }
 
 // Provider 是文本补全供应商。

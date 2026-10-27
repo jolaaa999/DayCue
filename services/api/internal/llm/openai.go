@@ -58,7 +58,8 @@ type chatRequest struct {
 
 type chatResponse struct {
 	Choices []struct {
-		Message chatMessage `json:"message"`
+		Message      chatMessage `json:"message"`
+		FinishReason string      `json:"finish_reason"`
 	} `json:"choices"`
 	Usage struct {
 		PromptTokens     int `json:"prompt_tokens"`
@@ -119,6 +120,7 @@ func (o *OpenAI) Complete(ctx context.Context, system, user string) (Result, err
 		Model:            o.model,
 		PromptTokens:     out.Usage.PromptTokens,
 		CompletionTokens: out.Usage.CompletionTokens,
+		FinishReason:     out.Choices[0].FinishReason,
 	}, nil
 }
 

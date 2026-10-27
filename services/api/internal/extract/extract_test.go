@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"runtime"
+	"strings"
 	"testing"
 	"time"
 
@@ -235,6 +236,82 @@ func TestNormalizeNonContractShapeIsError(t *testing.T) {
 	if _, err := Normalize(llm.Result{Text: raw, Provider: "stub", Model: "m"}, req, mustTime(t, req.RecordedAt), memLoc(t, req.Timezone), 0); err != ErrModelOutputInvalid {
 		t.Fatalf("缺少 items 数组时必须报 ErrModelOutputInvalid，实得 %v", err)
 	}
+}
+
+
+// scriptedProvider 按顺序返回预置输出，并记录每次被调用时的 user 消息，
+// 用来验证「格式纠正只做一次」以及纠正消息里确实带了失败原因。
+type scriptedProvider struct {
+	outputs []string
+	users   []string
+}
+
+func (s *scriptedProvider) Name() string  { return "stub" }
+func (s *scriptedProvider) Model() string { return "m" }
+func (s *scriptedProvider) Complete(_ context.Context, _ string, user string) (llm.Result, error) {
+	s.users = append(s.users, user)
+	idx := len(s.users) - 1
+	if idx >= len(s.outputs) {
+		idx = len(s.outputs) - 1
+	}
+	return llm.Result{Text: s.outputs[idx], Provider: "stub", Model: "m", FinishReason: "stop"}, nil
+}
+
+// 第一次形状跑偏、纠正后合格：应该成功，且只调用两次。
+func TestExtractRepairsOnceThenSucceeds(t *testing.T) {
+	req := baseRequest()
+	p := &scriptedProvider{outputs: []string{
+		`{"intent":"create_reminder","title":"复习操作系统"}`,
+		`{"items":[{"kind":"task","title":"复习操作系统","source_evidence":"明晚八点提醒我复习操作系统","date_expression":"明晚八点"}]}`,
+	}}
+	resp, err := Extract(context.Background(), req, p)
+	if err != nil {
+		t.Fatalf("纠正一次后应成功: %v", err)
+	}
+	if len(p.users) != 2 {
+		t.Fatalf("应只调用两次，实得 %d", len(p.users))
+	}
+	if len(resp.Items) != 1 || resp.Items[0].Kind != "task" {
+		t.Fatalf("期望 1 条任务候选，实得 %+v", resp.Items)
+	}
+	// 第二次请求必须说明上一轮错在哪，否则模型没有理由改形状。
+	if !strings.Contains(p.users[1], "没有通过校验") {
+		t.Errorf("纠正消息里应带上失败原因，实得: %s", p.users[1])
+	}
+}
+
+// 两次都跑偏：如实报错，且不会无限重试。
+func TestExtractGivesUpAfterOneRepair(t *testing.T) {
+	req := baseRequest()
+	bad := `{"intent":"create_reminder"}`
+	p := &scriptedProvider{outputs: []string{bad, bad}}
+	if _, err := Extract(context.Background(), req, p); err != ErrModelOutputInvalid {
+		t.Fatalf("两次都不合格应返回 ErrModelOutputInvalid，实得 %v", err)
+	}
+	if len(p.users) != 2 {
+		t.Fatalf("最多调用两次，实得 %d", len(p.users))
+	}
+}
+
+// 截断的输出不能当成「没有事项」。
+func TestExtractTruncatedIsError(t *testing.T) {
+	req := baseRequest()
+	p := &scriptedProvider{outputs: []string{`{"items":[{"kind":"task","ti`, `{"items":[{"kind":"task","ti`}}
+	p2 := &truncatingProvider{inner: p}
+	if _, err := Extract(context.Background(), req, p2); err != ErrModelOutputInvalid {
+		t.Fatalf("截断必须报 ErrModelOutputInvalid，实得 %v", err)
+	}
+}
+
+// truncatingProvider 把 finish_reason 标成 length，用来模拟被长度限制截断。
+type truncatingProvider struct{ inner *scriptedProvider }
+
+func (p *truncatingProvider) Name() string  { return "stub" }
+func (p *truncatingProvider) Model() string { return "m" }
+func (p *truncatingProvider) Complete(ctx context.Context, system, user string) (llm.Result, error) {
+	out, err := p.inner.Complete(ctx, system, user)
+	out.FinishReason = "length"
+	return out, err
 }
 
 func TestExtractPropagatesProviderTimeout(t *testing.T) {

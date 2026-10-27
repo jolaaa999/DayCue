@@ -25,6 +25,18 @@ const systemPrompt = `你是 DayCue 的信息整理引擎，把用户随手记�
 - 一条输入可以拆出多条候选；没有可拆分内容时返回空 items 数组。
 - 不要编造原文没有的信息。`
 
+// outputContractReminder 是**必须随每条 user 消息一起发出去**的最小输出要求。
+//
+// 为什么不能只写在 system 里：实测有的 OpenAI-compatible 中转会把 system 消息整条丢掉，
+// 模型只看到原文，于是按自己的默认模板作答——返回 {"intent":"create_reminder",…} 这种
+// 看起来像 JSON、但完全不是契约的形状。把要点复述在 user 消息里，这类端点才能正常工作；
+// 对正常端点只是几行冗余指令，不影响结果。
+const outputContractReminder = `
+输出要求（服务端会严格校验，不符合即判为失败）：
+1. 只输出一个 JSON 对象，顶层必须有 items 数组；没有可整理的内容时就用 {"items":[]}。
+2. items 元素字段：kind（只能是 "task" 或 "note"）、title（不超过 40 个汉字）、detail、source_evidence（原文里的连续片段，用来核对依据）、date_expression（原文里的时间说法，没有就填空字符串）、course_hint、place_hint、confidence（0~1）。
+3. 绝对不要输出任何具体日期或时刻，日期换算由服务端完成。`
+
 // BuildUserMessage 把录入时间、时区与原文拼成用户消息。
 // 明确告诉模型「不要算日期」，是为了让它把算数责任交回服务端的确定性代码。
 func BuildUserMessage(req Request, recordedAt time.Time, loc *time.Location) string {
@@ -39,7 +51,22 @@ func BuildUserMessage(req Request, recordedAt time.Time, loc *time.Location) str
 	b.WriteString(req.Source.Type)
 	b.WriteString("\n\n原文：\n")
 	b.WriteString(req.Source.Text)
-	b.WriteString("\n\n请只输出 JSON。")
+	b.WriteString("\n")
+	b.WriteString(outputContractReminder)
+	b.WriteString("\n请只输出 JSON。")
+	return b.String()
+}
+
+// BuildRepairMessage 是一次「有界格式纠正」用的用户消息：原文不变，附上上一轮为什么不合格。
+//
+// 为什么要带上失败原因：模型看到「上一次没有 items 数组」才会去改形状，
+// 只重复原指令大概率再错一次。这个纠正最多做一次，见 Extract。
+func BuildRepairMessage(req Request, recordedAt time.Time, loc *time.Location, reason string) string {
+	var b strings.Builder
+	b.WriteString(BuildUserMessage(req, recordedAt, loc))
+	b.WriteString("\n\n上一轮的输出没有通过校验：")
+	b.WriteString(reason)
+	b.WriteString("\n请重新输出：只要一个 JSON 对象，顶层是 items 数组，字段完全按上面的要求。")
 	return b.String()
 }
 
