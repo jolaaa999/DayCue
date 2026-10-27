@@ -56,6 +56,13 @@ func Normalize(out llm.Result, req Request, recordedAt time.Time, loc *time.Loca
 	if err != nil {
 		return Response{}, err
 	}
+	// 合法 JSON 不等于合契约 JSON。有些供应商（尤其是中转层会自己拼提示词的）
+	// 会返回 {"intent":"...","remind_at":"..."} 这类别的形状；如果只按「items 为空」处理，
+	// 界面就会显示「这段内容里没有可整理的明确事项」，把用户明确写下的待办说成没内容。
+	// 这里要求顶层必须有 items 数组，否则按「模型输出无法结构化」报错，记录保留、可重试。
+	if !hasItemsArray(out.Text) {
+		return Response{}, ErrModelOutputInvalid
+	}
 
 	mode := "live"
 	if out.Provider == "fixture" {
@@ -166,6 +173,27 @@ func Normalize(out llm.Result, req Request, recordedAt time.Time, loc *time.Loca
 		resp.Warnings = append(resp.Warnings, "这段内容里没有可整理的明确事项。")
 	}
 	return resp, nil
+}
+
+// hasItemsArray 判断顶层对象里是否真的有 items 数组。
+// 只做形状检查，不校验元素内容——元素校验在 Normalize 主体里逐条做。
+func hasItemsArray(text string) bool {
+	candidates := []string{stripFence(text), outermostJSON(text)}
+	for _, candidate := range candidates {
+		var probe map[string]json.RawMessage
+		if err := json.Unmarshal([]byte(candidate), &probe); err != nil {
+			continue
+		}
+		raw, ok := probe["items"]
+		if !ok {
+			continue
+		}
+		var arr []json.RawMessage
+		if json.Unmarshal(raw, &arr) == nil {
+			return true
+		}
+	}
+	return false
 }
 
 // parseModelOutput 容忍 Markdown 代码块围栏，但拒绝任何非 JSON 的返回。

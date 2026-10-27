@@ -4,27 +4,43 @@ DayCue 的 Android 客户端，Kotlin + Jetpack Compose + Room。
 数据模型与 HTTP 契约对齐 iOS 端（apps/ios/Sources/DayCueCore/Schema.swift、contracts/v1/*.schema.json），
 Android 侧本地库版本已走到 v3（比 iOS 多 place.coordinate_system 与 geo_rule.linked_task_id 两列）。
 
-## 当前状态：已构建并通过单元测试，但未在设备上运行
+## 当前状态：已构建、单测通过，界面已上真机
 
 已经真实执行过（Windows + JDK 17 + Gradle 8.9 + Android SDK platform 35 / build-tools 35.0.0）：
 
     gradlew.bat --no-daemon --console=plain :app:assembleDebug :app:testDebugUnitTest
-    # BUILD SUCCESSFUL in 1m 40s
+    # BUILD SUCCESSFUL
 
-- 产物 `app/build/outputs/apk/debug/app-debug.apk`（约 11.8 MB）。
-- **174 个 JVM 单元测试全部通过，0 失败 0 错误 0 跳过**（15 个测试类）。
+- 产物 `app/build/outputs/apk/debug/app-debug.apk`（约 11.7 MB）。
+- **JVM 单元测试全部通过，0 失败 0 错误 0 跳过**（当前 235 个测试、21 个测试类）。
 - Room schema 已由 KSP 导出到 `app/schemas/com.daycue.android.data.local.DayCueDatabase/`，
   **2.json 与 3.json 都已入库**且都不是手工编写的文件：
   2.json 是 MIGRATION_2_3 的升级起点，3.json 是当前版本（漂移守卫与设备迁移测试都读它）。
 - Gradle Wrapper（含 `gradle-wrapper.jar`）已入库，**不需要**先装 Gradle。
 
+**界面已在一台真机上跑过**（vivo V2361GA / Android 15 / 1080×2400，`adb install -r` 覆盖安装、用户数据保留）：
+今天、记录、记忆、设置四个页面以及设置二级页在浅色 / 深色 / 系统大字号下都截了图，
+截图与改造说明见 [`docs/ui-redesign/`](../../docs/ui-redesign/README.md)。
+
 **仍然未验证的部分**（不要把它们当成已通过）：
 
-- **没有任何真机或模拟器跑过这个 APK。** 通知弹窗、后台作业调度（WorkManager）、
-  定位、录音、精确闹钟在真实系统上的行为全部未验证。
-- `src/androidTest/` 里的 DAO 测试与迁移测试需要设备，本机未执行；
+- 通知弹窗、后台作业调度（WorkManager）、定位围栏、精确闹钟在真实系统上的行为**未验证**；
+  录音只在「进入录入页即开始录音」这一步确认过，转写与解析仍依赖后端。
+- `src/androidTest/` 里的 DAO 测试与迁移测试需要设备执行，本轮**没有跑**；
   `MIGRATION_1_2` / `MIGRATION_2_3` 的迁移正确性同样只能在那时验证。
+- 今天页快记区（麦克风 / 写文字 / 拍一张）的**点击**没能用 adb 注入触摸稳定命中
+  （该机 `wm size` 有 1080×2400 override、物理 1260×2800，注入坐标与截图坐标存在缩放偏差），
+  同一跳转已从记录页「说一句」验证通过，但今天页那三个按钮仍需人工点一次。
 - 「能编译 + 单元测试通过」≠「功能可用」。前者是构建证据，后者要设备验收。
+
+### 界面预览画廊（仅 debug）
+
+`app/src/debug/java/com/daycue/android/preview/` 里有一套独立展示场景 + Compose Preview，
+用固定演示数据渲染「全空首页 / 有行程与任务 / 同步异常 / 记录列表 / 待确认记忆 / 设置首页」等状态：
+
+    adb shell am start -n com.daycue.android/.preview.PreviewGalleryActivity --es scene today_full --es dark 1
+
+这些演示数据只在 debug 源集里构造，不进 release 包，也不会写进用户数据库。
 
 ## 目录结构
 
@@ -77,6 +93,48 @@ Android 侧本地库版本已走到 v3（比 iOS 多 place.coordinate_system 与
 - `app/schemas/*.json`：Room 导出的各版本 schema，是迁移测试的输入。
   **没有它就没有历史版本的比对基准**，所以每次改表都要把新导出的那一份一起入库。
 - `app/build/`：不要在仓库里提交（已在 .gitignore 中）。
+
+## 真机联调
+
+第一次装到手机上跑通「连后端」这一段，有三处**必踩的坑**，都不是参数填错：
+
+1. **明文 HTTP 默认被拦。** `targetSdk = 35`，从 API 28 起系统禁止明文流量，
+   而联调用的就是 `http://<电脑IP>:8787`。放行只写在
+   `app/src/debug/AndroidManifest.xml`（`usesCleartextTraffic="true"`），
+   **release 保持禁止**——不要为了联调把它挪进 main。
+   报错是 `CLEARTEXT communication ... not permitted by network security policy`，
+   看起来像网络不通，实际是本地策略在拦。
+2. **后端必须带 `-tags postgres` 启动。** 不带的话 `/v1/auth/*` 与 `/v1/sync/*`
+   根本不存在（返回 404），手机连令牌都拿不到。
+3. **必须先在电脑上换一个用户令牌。** 本端没有登录界面，设置页只能粘贴令牌。
+
+按顺序执行：
+
+    # 1) 起后端（监听 0.0.0.0，自动生成并持久化服务令牌）
+    powershell -File scripts/run-api-lan.ps1
+
+    # 2) 换一个用户令牌
+    powershell -File scripts/issue-token.ps1 -Register
+
+    # 3) 装包（用 -r 覆盖安装以保留数据，同时能拿 logcat）
+    adb install -r apps/android/app/build/outputs/apk/debug/app-debug.apk
+
+    # 4) 让手机访问电脑（二选一）
+    adb reverse tcp:8787 tcp:8787      # USB：设置页填 http://127.0.0.1:8787
+    #   或走局域网：设置页填 http://<电脑局域网IP>:8787，并放行防火墙 8787
+
+然后在 App 设置页填「后端地址」+「Bearer Token」。
+
+注意事项（按踩坑概率排序）：
+
+- **覆盖安装会触发 Room 迁移 v2→v3**，这是 `MIGRATION_2_3` 第一次在真实 SQLite 上执行。
+  若启动崩溃，先怀疑这里。
+- 覆盖安装报 `INSTALL_FAILED_UPDATE_INCOMPATIBLE` 说明签名不同，只能先卸载——**会丢数据**。
+- vivo 的 OriginOS 会杀后台：测提醒前先允许自启动、关闭电池优化、加入后台白名单。
+- `SCHEDULE_EXACT_ALARM` 不是运行时弹窗权限，需去系统设置手动打开；
+  没开时按设计降级为不精确提醒，所以「晚几分钟响」是预期行为。
+- 围栏用系统 `addProximityAlert` 且**有意不申请** `ACCESS_BACKGROUND_LOCATION`，
+  因此**切后台后不触发是预期行为**，不要当回归。
 
 ## 分层与依赖方向
 

@@ -9,6 +9,7 @@ import com.daycue.android.AppContainer
 import com.daycue.android.data.local.entity.MemoryItemRecord
 import com.daycue.android.domain.model.MemorySourceKind
 import com.daycue.android.domain.model.MemoryStatus
+import java.time.Instant
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -35,6 +36,8 @@ data class MemoryUiState(
     val loaded: Boolean = false,
     val message: String? = null,
     val error: String? = null,
+    /** 记忆行的日期只到日：「10月20日」；跨年才补年份，基准时刻由 ViewModel 注入。 */
+    val now: Instant? = null,
 )
 
 /**
@@ -46,7 +49,7 @@ data class MemoryUiState(
  */
 class MemoryViewModel(private val container: AppContainer) : ViewModel() {
 
-    private val _state = MutableStateFlow(MemoryUiState())
+    private val _state = MutableStateFlow(MemoryUiState(now = container.timeSource.now()))
     val state: StateFlow<MemoryUiState> = _state.asStateFlow()
 
     init {
@@ -96,8 +99,10 @@ class MemoryViewModel(private val container: AppContainer) : ViewModel() {
      * 放一个不会真正生效的开关比不放更糟——用户会以为关掉之后系统真的不记了。
      */
     private fun defaultPolicy(): List<MemorySourceRow> = listOf(
-        MemorySourceRow(MemorySourceKind.USER_STATEMENT, "你自己说过的话，记下来即视为事实"),
-        MemorySourceRow(MemorySourceKind.USER_SETTING, "你在设置里选定的偏好，直接生效"),
+        // 措辞刻意不说「即视为事实」：用户说的话被记下来，记录的是「用户这样说过」，
+        // 而不是这件事在客观世界里成立。界面把两者混为一谈，会让人以为 App 在替自己下结论。
+        MemorySourceRow(MemorySourceKind.USER_STATEMENT, "你自己说过的话。App 记下的是你的说法，不代表它一定成立"),
+        MemorySourceRow(MemorySourceKind.USER_SETTING, "你在设置里选定的偏好，直接按它执行"),
         MemorySourceRow(MemorySourceKind.INFERRED, "系统推断，只作为待确认候选，等你确认后才算事实"),
     )
 

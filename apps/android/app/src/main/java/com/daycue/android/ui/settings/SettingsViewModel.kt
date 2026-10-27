@@ -24,6 +24,9 @@ enum class ConnectionState { IDLE, TESTING, OK, FAILED }
 data class SettingsUiState(
     val loading: Boolean = true,
     val backendUrl: String = "",
+    // 令牌只作为「待保存的草稿」留在状态里，保存后立刻清空；已保存与否由 tokenStored 表达。
+    val bearerToken: String = "",
+    val tokenStored: Boolean = false,
     val offlineMode: Boolean = false,
     val purelyLocal: Boolean = true,
     val connection: ConnectionState = ConnectionState.IDLE,
@@ -44,6 +47,8 @@ data class SettingsUiState(
     val quietStart: String = "22:30",
     val quietEnd: String = "08:00",
     val locationRulesEnabled: Boolean = false,
+    // 外观偏好（跟随系统 / 浅色 / 深色），原始字符串由 ThemeMode.fromRaw 解释。
+    val themeMode: String = "system",
     // 统计
     val noteCount: Int = 0,
     val openTaskCount: Int = 0,
@@ -83,13 +88,19 @@ class SettingsViewModel(private val container: AppContainer) : ViewModel() {
             val term = runCatching { settings.termCalendar() }.getOrNull()
             val budget = runCatching { settings.budgetPolicy() }.getOrDefault(BudgetPolicy())
             val quiet = runCatching { settings.quietHours() }.getOrDefault(LocalTime.of(22, 30) to LocalTime.of(8, 0))
+            // 令牌存在 AndroidKeyStore 里，解密有成本，不能在主线程做。
+            val hasToken = withContext(Dispatchers.IO) {
+                runCatching { container.tokenStore.read() != null }.getOrDefault(false)
+            }
             _state.update {
                 it.copy(
                     loading = false,
+                    tokenStored = hasToken,
                     backendUrl = runCatching { settings.backendBaseUrl() }.getOrNull().orEmpty(),
                     offlineMode = runCatching { settings.offlineMode() }.getOrDefault(false),
                     purelyLocal = runCatching { settings.isPurelyLocal() }.getOrDefault(true),
                     locationRulesEnabled = runCatching { settings.locationRulesEnabled() }.getOrDefault(false),
+                    themeMode = runCatching { settings.themeMode() }.getOrNull() ?: "system",
                     termFirstMonday = term?.firstWeekMonday?.toString().orEmpty(),
                     termWeeks = term?.totalWeeks?.toString().orEmpty(),
                     dailyLimit = budget.dailyLimit.toString(),
@@ -134,6 +145,44 @@ class SettingsViewModel(private val container: AppContainer) : ViewModel() {
         }
     }
 
+    fun onBearerTokenChange(value: String) = _state.update { it.copy(bearerToken = value) }
+
+    /**
+     * 保存后端令牌（传空串即清除）。
+     *
+     * 为什么必须让用户手工粘贴：本端没有登录界面，令牌只能在电脑上用
+     * scripts/issue-token.ps1 换好再填进来。此前 TokenStore 虽然实现了 save()，
+     * 却**没有任何调用方**，于是设备登记、同步、AI 解析全是 401，
+     * 而界面上完全没有地方能把令牌填进去——这类「类写好了但没有入口」的缺口
+     * 从代码结构上看不出来，只有真的把 App 装到手机上才会撞到。
+     */
+    fun saveBearerToken() {
+        val raw = _state.value.bearerToken.trim()
+        viewModelScope.launch {
+            // TokenStore.save 内部会吞掉 KeyStore 异常（它拒绝退回明文存储），
+            // 所以这里用「存完再读回来」确认结果：只信 save 的返回会把
+            // 「系统密钥库不可用」显示成保存成功。
+            val stored = withContext(Dispatchers.IO) {
+                runCatching {
+                    container.tokenStore.save(raw)
+                    raw.isEmpty() || container.tokenStore.read() != null
+                }.getOrDefault(false)
+            }
+            if (!stored) {
+                _state.update { it.copy(error = "保存后端令牌失败：系统密钥库不可用，令牌没有写入", message = null) }
+                return@launch
+            }
+            // 输入框立即清空：令牌一旦保存就不该继续留在界面状态里被截屏或误看。
+            _state.update {
+                it.copy(
+                    bearerToken = "",
+                    message = if (raw.isEmpty()) "已清除后端令牌" else "后端令牌已保存",
+                )
+            }
+            refresh()
+        }
+    }
+
     fun setOfflineMode(enabled: Boolean) {
         viewModelScope.launch {
             runCatching { container.settingsRepository.setOfflineMode(enabled) }
@@ -161,6 +210,23 @@ class SettingsViewModel(private val container: AppContainer) : ViewModel() {
                     }
                     _state.update { it.copy(connection = ConnectionState.FAILED, connectionMessage = "连接失败：$detail") }
                 }
+        }
+    }
+
+    /**
+     * 外观偏好。
+     *
+     * 写库之后再 refresh：主题由根界面监听同一条流来切换，
+     * 这里不做乐观更新，避免「界面变成深色但库里还是浅色」这种下次启动才发现的错位。
+     */
+    fun setThemeMode(mode: com.daycue.android.ui.theme.ThemeMode) {
+        viewModelScope.launch {
+            runCatching { container.settingsRepository.setThemeMode(mode.raw) }
+                .onSuccess {
+                    _state.update { it.copy(message = "外观已切换为" + mode.displayName) }
+                    refresh()
+                }
+                .onFailure { it.fail("保存外观设置失败") }
         }
     }
 

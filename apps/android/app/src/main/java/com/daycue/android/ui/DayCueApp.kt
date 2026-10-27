@@ -1,14 +1,23 @@
 package com.daycue.android.ui
 
 import androidx.compose.foundation.layout.padding
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.DateRange
+import androidx.compose.material.icons.outlined.List
+import androidx.compose.material.icons.outlined.Settings
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
+import androidx.compose.material3.NavigationBarItemDefaults
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.collectAsState
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.unit.dp
 import androidx.navigation.NavGraph.Companion.findStartDestination
 import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
@@ -17,6 +26,7 @@ import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import com.daycue.android.ui.capture.CaptureScreen
+import com.daycue.android.ui.common.DayCueIcons
 import com.daycue.android.ui.followup.FollowUpScreen
 import com.daycue.android.ui.memory.MemoryScreen
 import com.daycue.android.ui.note.NoteDetailScreen
@@ -27,9 +37,19 @@ import com.daycue.android.ui.place.RuleEditScreen
 import com.daycue.android.ui.schedule.CourseEditScreen
 import com.daycue.android.ui.schedule.IcsImportScreen
 import com.daycue.android.ui.schedule.ScheduleWeekScreen
+import com.daycue.android.ui.settings.SettingsAccountScreen
+import com.daycue.android.ui.settings.SettingsAdvancedScreen
+import com.daycue.android.ui.settings.SettingsAppearanceScreen
+import com.daycue.android.ui.settings.SettingsDataScreen
+import com.daycue.android.ui.settings.SettingsLocationScreen
+import com.daycue.android.ui.settings.SettingsPermissionsScreen
+import com.daycue.android.ui.settings.SettingsProactiveScreen
 import com.daycue.android.ui.settings.SettingsScreen
+import com.daycue.android.ui.settings.SettingsTermScreen
 import com.daycue.android.ui.task.TaskListScreen
 import com.daycue.android.ui.theme.DayCueTheme
+import com.daycue.android.ui.theme.ThemeMode
+import com.daycue.android.ui.theme.resolveDark
 import com.daycue.android.ui.today.TodayScreen
 
 /**
@@ -44,7 +64,27 @@ object DayCueRoutes {
     const val MEMORY = "memory"
     const val SETTINGS = "settings"
 
-    const val CAPTURE = "capture"
+    // 设置从「一页塞满」拆成「分组首页 + 二级页」，二级页各自是一条路由。
+    const val SETTINGS_ACCOUNT = "settings/account"
+    const val SETTINGS_PROACTIVE = "settings/proactive"
+    const val SETTINGS_LOCATION = "settings/location"
+    const val SETTINGS_TERM = "settings/term"
+    const val SETTINGS_PERMISSIONS = "settings/permissions"
+    const val SETTINGS_APPEARANCE = "settings/appearance"
+    const val SETTINGS_DATA = "settings/data"
+    const val SETTINGS_ADVANCED = "settings/advanced"
+
+    /**
+     * 记录页带一个 intent 参数，用来表达「用户点的是哪一个入口」。
+     *
+     * 为什么不做三个独立页面：捕获流程（先落库、再转写/解析、失败保留内容）只有一份，
+     * 复用它才不会有三条各自演化的分支；参数只决定进入后先摆出哪种输入。
+     */
+    const val CAPTURE = "capture?intent={intent}"
+    const val CAPTURE_INTENT_VOICE = "voice"
+    const val CAPTURE_INTENT_TEXT = "text"
+    const val CAPTURE_INTENT_IMAGE = "image"
+
     const val TASKS = "tasks"
     const val SCHEDULE = "schedule"
     const val FOLLOW_UP = "followup"
@@ -67,6 +107,9 @@ object DayCueRoutes {
      */
     const val ID_NEW = "__new__"
 
+    fun capture(intent: String = ""): String =
+        if (intent.isBlank()) "capture" else "capture?intent=" + intent
+
     fun noteDetail(noteId: String): String = "note/" + noteId
 
     fun courseEdit(courseId: String): String = "course/" + courseId
@@ -77,33 +120,41 @@ object DayCueRoutes {
         "place/" + placeId + "/rule/" + (ruleId ?: ID_NEW)
 }
 
-/** 底栏入口。mark 用单个汉字代替图标：少引一个 material-icons 依赖，也避免了图标语义不敢翻译的问题。 */
-private data class BottomEntry(val route: String, val label: String, val mark: String)
+/** 底栏入口。图标统一用线性（Outlined）风格，不再用单个汉字代替图标。 */
+private data class BottomEntry(val route: String, val label: String, val icon: ImageVector)
 
 private val BOTTOM_ENTRIES = listOf(
-    BottomEntry(DayCueRoutes.TODAY, "今天", "今"),
-    BottomEntry(DayCueRoutes.RECORDS, "记录", "记"),
-    BottomEntry(DayCueRoutes.MEMORY, "记忆", "忆"),
-    BottomEntry(DayCueRoutes.SETTINGS, "设置", "设"),
+    BottomEntry(DayCueRoutes.TODAY, "今天", Icons.Outlined.DateRange),
+    BottomEntry(DayCueRoutes.RECORDS, "记录", Icons.Outlined.List),
+    BottomEntry(DayCueRoutes.MEMORY, "记忆", DayCueIcons.Bookmark),
+    BottomEntry(DayCueRoutes.SETTINGS, "设置", Icons.Outlined.Settings),
 )
 
 /**
- * 应用根界面：主题 + 导航 + 底栏。
+ * 应用根界面：外观偏好 + 主题 + 导航 + 底栏。
  *
- * 底栏只出现在四个顶层入口上；课表、待办、追问、导入这些是「从今天页钻进去」的页面，
- * 它们带返回键而不是底栏，否则用户会以为底栏切换是「返回上一层」。
+ * 外观偏好从设置仓储读，而不是直接读系统深色开关：用户在「设置 → 外观」里
+ * 固定成浅色之后，App 就不该再跟着系统跳。读取是流式的，切主题不需要重启。
  */
 @Composable
 fun DayCueApp() {
-    DayCueTheme {
+    val container = rememberContainer()
+    val rawMode by container.settingsRepository.observeThemeMode().collectAsState(initial = null)
+    val mode = ThemeMode.fromRaw(rawMode)
+
+    DayCueTheme(darkTheme = mode.resolveDark()) {
         val navController = rememberNavController()
         val backStackEntry by navController.currentBackStackEntryAsState()
         val currentRoute = backStackEntry?.destination?.route
 
         Scaffold(
+            containerColor = MaterialTheme.colorScheme.background,
             bottomBar = {
                 if (BOTTOM_ENTRIES.any { it.route == currentRoute }) {
-                    NavigationBar {
+                    NavigationBar(
+                        containerColor = MaterialTheme.colorScheme.surface,
+                        tonalElevation = 0.dp,
+                    ) {
                         BOTTOM_ENTRIES.forEach { entry ->
                             NavigationBarItem(
                                 selected = currentRoute == entry.route,
@@ -119,8 +170,23 @@ fun DayCueApp() {
                                         }
                                     }
                                 },
-                                icon = { Text(entry.mark, style = MaterialTheme.typography.labelLarge) },
-                                label = { Text(entry.label) },
+                                icon = {
+                                    Icon(
+                                        imageVector = entry.icon,
+                                        contentDescription = null,
+                                        modifier = Modifier.padding(0.dp),
+                                    )
+                                },
+                                label = { Text(entry.label, style = MaterialTheme.typography.labelMedium) },
+                                // 选中态用同一个青绿容器色：底栏选中色与页面主色是同一个来源，
+                                // 不再出现「按钮浅紫、导航墨绿」这种两套品牌色。
+                                colors = NavigationBarItemDefaults.colors(
+                                    selectedIconColor = MaterialTheme.colorScheme.onPrimaryContainer,
+                                    selectedTextColor = MaterialTheme.colorScheme.onSurface,
+                                    indicatorColor = MaterialTheme.colorScheme.primaryContainer,
+                                    unselectedIconColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    unselectedTextColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                                ),
                             )
                         }
                     }
@@ -137,7 +203,9 @@ fun DayCueApp() {
                         onOpenTasks = { navController.navigate(DayCueRoutes.TASKS) },
                         onOpenSchedule = { navController.navigate(DayCueRoutes.SCHEDULE) },
                         onOpenFollowUp = { navController.navigate(DayCueRoutes.FOLLOW_UP) },
-                        onOpenCapture = { navController.navigate(DayCueRoutes.CAPTURE) },
+                        onOpenCapture = { intent -> navController.navigate(DayCueRoutes.capture(intent)) },
+                        onOpenRecords = { navController.navigate(DayCueRoutes.RECORDS) },
+                        onOpenSettings = { navController.navigate(DayCueRoutes.SETTINGS) },
                         onOpenNote = { noteId -> navController.navigate(DayCueRoutes.noteDetail(noteId)) },
                     )
                 }
@@ -145,22 +213,86 @@ fun DayCueApp() {
                 composable(DayCueRoutes.RECORDS) {
                     NoteListScreen(
                         onOpenNote = { noteId -> navController.navigate(DayCueRoutes.noteDetail(noteId)) },
-                        onNewCapture = { navController.navigate(DayCueRoutes.CAPTURE) },
+                        onNewCapture = { intent -> navController.navigate(DayCueRoutes.capture(intent)) },
                     )
                 }
 
                 composable(DayCueRoutes.MEMORY) {
-                    MemoryScreen()
+                    MemoryScreen(
+                        onOpenCapture = { navController.navigate(DayCueRoutes.capture(DayCueRoutes.CAPTURE_INTENT_TEXT)) },
+                    )
                 }
 
                 composable(DayCueRoutes.SETTINGS) {
                     SettingsScreen(
+                        onOpenAccount = { navController.navigate(DayCueRoutes.SETTINGS_ACCOUNT) },
+                        onOpenProactive = { navController.navigate(DayCueRoutes.SETTINGS_PROACTIVE) },
+                        onOpenLocation = { navController.navigate(DayCueRoutes.SETTINGS_LOCATION) },
+                        onOpenTerm = { navController.navigate(DayCueRoutes.SETTINGS_TERM) },
+                        onOpenPermissions = { navController.navigate(DayCueRoutes.SETTINGS_PERMISSIONS) },
+                        onOpenAppearance = { navController.navigate(DayCueRoutes.SETTINGS_APPEARANCE) },
+                        onOpenData = { navController.navigate(DayCueRoutes.SETTINGS_DATA) },
+                        onOpenAdvanced = { navController.navigate(DayCueRoutes.SETTINGS_ADVANCED) },
+                    )
+                }
+
+                composable(DayCueRoutes.SETTINGS_ACCOUNT) {
+                    SettingsAccountScreen(
+                        onBack = { navController.popBackStack() },
+                        onOpenAdvanced = { navController.navigate(DayCueRoutes.SETTINGS_ADVANCED) },
+                    )
+                }
+
+                composable(DayCueRoutes.SETTINGS_PROACTIVE) {
+                    SettingsProactiveScreen(onBack = { navController.popBackStack() })
+                }
+
+                composable(DayCueRoutes.SETTINGS_LOCATION) {
+                    SettingsLocationScreen(
+                        onBack = { navController.popBackStack() },
                         onOpenPlaces = { navController.navigate(DayCueRoutes.PLACE_LIST) },
                     )
                 }
 
-                composable(DayCueRoutes.CAPTURE) {
-                    CaptureScreen(onBack = { navController.popBackStack() })
+                composable(DayCueRoutes.SETTINGS_TERM) {
+                    SettingsTermScreen(
+                        onBack = { navController.popBackStack() },
+                        onOpenSchedule = { navController.navigate(DayCueRoutes.SCHEDULE) },
+                        onImportIcs = { navController.navigate(DayCueRoutes.ICS_IMPORT) },
+                    )
+                }
+
+                composable(DayCueRoutes.SETTINGS_PERMISSIONS) {
+                    SettingsPermissionsScreen(onBack = { navController.popBackStack() })
+                }
+
+                composable(DayCueRoutes.SETTINGS_APPEARANCE) {
+                    SettingsAppearanceScreen(onBack = { navController.popBackStack() })
+                }
+
+                composable(DayCueRoutes.SETTINGS_DATA) {
+                    SettingsDataScreen(onBack = { navController.popBackStack() })
+                }
+
+                composable(DayCueRoutes.SETTINGS_ADVANCED) {
+                    SettingsAdvancedScreen(onBack = { navController.popBackStack() })
+                }
+
+                composable(
+                    route = DayCueRoutes.CAPTURE,
+                    arguments = listOf(
+                        navArgument("intent") {
+                            type = NavType.StringType
+                            defaultValue = ""
+                        },
+                    ),
+                ) { entry ->
+                    CaptureScreen(
+                        onBack = { navController.popBackStack() },
+                        initialIntent = entry.arguments?.getString("intent").orEmpty(),
+                        // 保存为笔记之后直接进那条笔记：省一次「回记录页再找」。
+                        onOpenNote = { noteId -> navController.navigate(DayCueRoutes.noteDetail(noteId)) },
+                    )
                 }
 
                 composable(DayCueRoutes.PLACE_LIST) {

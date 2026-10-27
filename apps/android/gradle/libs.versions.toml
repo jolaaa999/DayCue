@@ -22,6 +22,9 @@ espresso = "3.6.1"
 # 可选依赖：GMS FusedLocationProvider。默认不引入（见 app/build.gradle.kts 的说明），
 # 这里保留版本号只是为了让需要它的分支不必再自己查版本。
 playServicesLocation = "21.3.0"
+# 图片文字识别：ML Kit 的中文模型是打包进 APK 的（不是 Play Services 动态下载版），
+# 所以完全离线可用，也符合「没网也要能记事」这条约束；代价是 APK 会大一点。
+mlkitTextChinese = "16.0.1"
 
 [libraries]
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
@@ -56,6 +59,8 @@ androidx-test-junit = { group = "androidx.test.ext", name = "junit", version.ref
 androidx-espresso-core = { group = "androidx.test.espresso", name = "espresso-core", version.ref = "espresso" }
 
 play-services-location = { group = "com.google.android.gms", name = "play-services-location", version.ref = "playServicesLocation" }
+
+mlkit-text-recognition-chinese = { group = "com.google.mlkit", name = "text-recognition-chinese", version.ref = "mlkitTextChinese" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }

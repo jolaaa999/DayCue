@@ -8,12 +8,15 @@ import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
 import com.daycue.android.AppContainer
 import com.daycue.android.core.DayCueTime
+import com.daycue.android.data.repository.NewTask
 import com.daycue.android.domain.contract.ContractDue
 import com.daycue.android.domain.contract.ExtractionRequest
 import com.daycue.android.domain.contract.ExtractionRequestSource
 import com.daycue.android.domain.model.CaptureStatus
 import com.daycue.android.domain.model.DueKind
+import com.daycue.android.domain.model.NoteOriginKind
 import com.daycue.android.domain.model.ProposalItemKind
+import com.daycue.android.platform.ocr.OcrOutcome
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -22,20 +25,62 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
+import java.time.Instant
+import java.time.LocalDate
 import java.time.ZoneId
 
-/** 解析候选的展示形态。候选在这里只用于「告诉用户解析出了什么」，不代替用户落库。 */
-data class ExtractedItemView(
-    val kindName: String,
-    val title: String,
-    val dueText: String,
-    val notes: List<String>,
+/** 图片文字识别的四个阶段。界面必须区分「还没跑完」「认出了字」「图上没字」「识别本身失败」。 */
+enum class OcrPhase { RECOGNIZING, DONE, EMPTY, FAILED }
+
+/** 刚保存到本机的图片。界面要拿它显示缩略图，用户才能确认自己选的是哪张。 */
+data class SavedImage(
+    val captureId: String,
+    val path: String,
+    val savedAtMillis: Long,
+    val ocrPhase: OcrPhase = OcrPhase.RECOGNIZING,
+    /** 识别/编辑后的文字；null 表示还没有文字可用。 */
+    val ocrText: String? = null,
 )
 
-data class ExtractionView(
-    val modeName: String,
-    val items: List<ExtractedItemView>,
-    val warnings: List<String>,
+/** 刚保存到本机的录音。 */
+data class SavedAudio(
+    val captureId: String,
+    val path: String,
+    val seconds: Long,
+    val savedAtMillis: Long,
+)
+
+/**
+ * 保存笔记前的草稿。
+ *
+ * 为什么不直接落库：识别出来的文字是「机器的读数」，标题取哪一行、正文要不要删几行，
+ * 只有用户自己能判断。所以先把标题与正文摆出来让用户改，点保存才写 note 表。
+ */
+data class NoteDraft(
+    val title: String,
+    val body: String,
+    val sourceLabel: String,
+)
+
+/**
+ * 解析候选。
+ *
+ * 保留 itemId、due 的原始形态与证据原文：确认页要能说清「这条是从哪句话来的、截止是哪天」，
+ * 而落库时也需要这些字段（origin_item_id、due_kind 等）。
+ */
+data class CandidateItem(
+    val itemId: String,
+    val isTask: Boolean,
+    val kindName: String,
+    val title: String,
+    val detail: String?,
+    val evidence: String,
+    val dueKind: DueKind,
+    val dueInstant: Instant?,
+    val dueLocalDate: LocalDate?,
+    val dueText: String,
+    val courseHint: String?,
+    val notes: List<String>,
 )
 
 data class CaptureUiState(
@@ -46,7 +91,27 @@ data class CaptureUiState(
     val notice: String? = null,
     val error: String? = null,
     val transcript: String? = null,
-    val extraction: ExtractionView? = null,
+    /** 刚拍/刚选的图片；null 表示这次还没有图片。 */
+    val savedImage: SavedImage? = null,
+    /** 刚录的音；null 表示这次还没有录音。 */
+    val savedAudio: SavedAudio? = null,
+    /** 待确认的笔记草稿；null 表示没有打开保存笔记的确认框。 */
+    val noteDraft: NoteDraft? = null,
+    /** 正在写笔记：防止连点写出两条一模一样的笔记。 */
+    val savingNote: Boolean = false,
+    /** 刚保存成功的笔记 id，界面据此给一个「打开笔记」的入口。 */
+    val savedNoteId: String? = null,
+    /** 正在编辑的 OCR 文字；null 表示没有打开编辑框。 */
+    val ocrEditDraft: String? = null,
+    /** 解析候选与确认页状态。 */
+    val candidates: List<CandidateItem> = emptyList(),
+    val selectedCandidateIds: Set<String> = emptySet(),
+    val confirmVisible: Boolean = false,
+    val extractionModeName: String? = null,
+    val extracting: Boolean = false,
+    val savingCandidates: Boolean = false,
+    /** 候选归属的那条 capture：确认保存后要挂上来源。 */
+    val extractCaptureId: String? = null,
 )
 
 /**
@@ -55,6 +120,9 @@ data class CaptureUiState(
  * 顺序是硬约束：**先落库，再谈网络**。任何一次提交都必须先产生一条 local 状态的记录，
  * 后面转写或解析失败只能改状态。没配后端时只提示「已保存到本机」，
  * 绝不把「没有解析」说成「解析成功」。
+ *
+ * 这一版把「解析」拆成了独立动作：保存只负责落库（离线也能用），
+ * 提取待办/笔记必须由用户点，解析结果再进确认页，确认之后才写 task / note。
  */
 class CaptureViewModel(private val container: AppContainer) : ViewModel() {
 
@@ -84,10 +152,27 @@ class CaptureViewModel(private val container: AppContainer) : ViewModel() {
         _state.update { it.copy(error = null, notice = null) }
     }
 
-    fun dismissExtraction() {
-        _state.update { it.copy(extraction = null, transcript = null) }
+    /** 用户在系统相机/相册里按了返回：不算错误，也不该留一条空记录。 */
+    fun reportCancelled() {
+        _state.update { it.copy(notice = "已取消，没有保存任何内容。", error = null) }
     }
 
+    fun reportPermissionDenied(message: String) {
+        _state.update { it.copy(error = message, notice = null) }
+    }
+
+    /** 拿不到临时拍照地址：说不清原因时就直说相机走不通，别让用户以为拍成功了。 */
+    fun reportCameraUnavailable() {
+        _state.update { it.copy(error = "无法创建相机临时文件，可以改用「选图」。", notice = null) }
+    }
+
+    fun reportCopied(count: Int) {
+        _state.update { it.copy(notice = "已复制 " + count + " 个字的文字。", error = null) }
+    }
+
+    // ---------------- 文字 ----------------
+
+    /** 只落库，不做解析。解析是独立动作（见 [extractFromText]）。 */
     fun submitText() {
         val text = _state.value.text.trim()
         if (text.isEmpty()) {
@@ -95,26 +180,49 @@ class CaptureViewModel(private val container: AppContainer) : ViewModel() {
             return
         }
         viewModelScope.launch {
-            _state.update { it.copy(busy = true, error = null, notice = null, extraction = null, transcript = null) }
-            val captureId = runCatching { container.captureRepository.saveText(text, zone) }.getOrElse { error ->
-                _state.update { it.copy(busy = false, error = error.message ?: "保存到本机失败") }
-                return@launch
-            }
+            _state.update { it.copy(busy = true, error = null, notice = null, transcript = null) }
+            val captureId = saveTextCapture(text)
             _state.update {
                 it.copy(
+                    busy = false,
                     text = "",
-                    notice = "已保存到本机（" + CaptureStatus.LOCAL.displayName + "）。",
+                    notice = if (captureId == null) {
+                        "保存到本机失败。"
+                    } else {
+                        "已保存到本机（" + CaptureStatus.LOCAL.displayName + "）。需要整理成笔记或待办时点「提取待办」。"
+                    },
+                    error = if (captureId == null) "保存到本机失败" else null,
                 )
             }
-            extract(captureId, text)
-            _state.update { it.copy(busy = false) }
         }
     }
 
-    /** 拍照或选图的结果。先把图片落到 App 目录，再写记录。 */
+    private suspend fun saveTextCapture(text: String): String? =
+        runCatching { container.captureRepository.saveText(text, zone) }.getOrNull()
+
+    // ---------------- 图片 ----------------
+
+    /**
+     * 拍照或选图的结果。先把图片落到 App 目录，再写记录，最后在本机识别文字。
+     *
+     * 保存成功后把路径放回状态：界面要立刻显示这张图，否则用户只能看到一句「已保存」，
+     * 根本不知道选中的是不是自己刚拍的那张。
+     * 再次选图时先撤掉上一张——「换一张」不该在数据库里堆出两条一模一样的记录。
+     */
     fun submitImage(uri: Uri) {
         viewModelScope.launch {
-            _state.update { it.copy(busy = true, error = null, notice = null, extraction = null, transcript = null) }
+            _state.value.savedImage?.let { discard(it) }
+            _state.update {
+                it.copy(
+                    busy = true,
+                    error = null,
+                    notice = null,
+                    transcript = null,
+                    savedImage = null,
+                    savedNoteId = null,
+                    ocrEditDraft = null,
+                )
+            }
             val file = runCatching { container.mediaStore.persistPickedImage(uri) }.getOrNull()
             if (file == null) {
                 _state.update {
@@ -122,45 +230,199 @@ class CaptureViewModel(private val container: AppContainer) : ViewModel() {
                 }
                 return@launch
             }
-            val saved = runCatching {
-                container.captureRepository.saveImage(file.absolutePath, null, zone)
-            }
+            val saved = runCatching { container.captureRepository.saveImage(file.absolutePath, null, zone) }
             saved.onFailure { error ->
                 _state.update { it.copy(busy = false, error = error.message ?: "保存图片失败") }
-            }.onSuccess {
-                // 图片 OCR 没有接入，这里不做任何「识别」动作，状态如实停在「已保存到本机」。
+            }.onSuccess { captureId ->
                 _state.update {
                     it.copy(
                         busy = false,
-                        notice = "图片已保存，可在记录详情里补充文字。（本机文件：" + file.name + "）",
+                        savedImage = SavedImage(
+                            captureId = captureId,
+                            path = file.absolutePath,
+                            savedAtMillis = container.timeSource.now().toEpochMilli(),
+                            ocrPhase = OcrPhase.RECOGNIZING,
+                        ),
+                        notice = "图片已保存到本机，正在识别上面的文字…",
                     )
+                }
+                // 识别走本机模型（离线），结果写进 ocr_text。
+                // 它只负责「把图上的字取出来」：判断哪句是待办、要不要生成笔记，仍然要用户点确认。
+                val outcome = container.imageTextRecognizer.recognize(file.absolutePath)
+                val text = (outcome as? OcrOutcome.Text)?.text
+                if (text != null) {
+                    runCatching { container.captureRepository.attachOcrText(captureId, text) }
+                }
+                _state.update { current ->
+                    val image = current.savedImage
+                    // 识别期间用户可能已经换了一张或删掉了：只有还是同一张时才回填结果。
+                    if (image == null || image.captureId != captureId) {
+                        current
+                    } else {
+                        val phase = when (outcome) {
+                            is OcrOutcome.Text -> OcrPhase.DONE
+                            OcrOutcome.Empty -> OcrPhase.EMPTY
+                            OcrOutcome.Failed -> OcrPhase.FAILED
+                        }
+                        current.copy(
+                            savedImage = image.copy(ocrPhase = phase, ocrText = text),
+                            notice = when (phase) {
+                                OcrPhase.DONE -> "已认出 " + (text?.length ?: 0) + " 个字的文字，可以在下面核对。"
+                                OcrPhase.EMPTY -> "未识别到文字，图片已保存。"
+                                else -> "识别文字失败，图片已保存。"
+                            },
+                        )
+                    }
                 }
             }
         }
     }
 
-    fun reportPermissionDenied(message: String) {
-        _state.update { it.copy(error = message, notice = null, busy = false) }
-    }
-
-    fun reportCameraUnavailable() {
-        _state.update {
-            it.copy(
-                error = "无法创建照片文件：系统没有授予相册写入权限。请改用「选图」，或到系统设置里为本应用开启存储权限。",
-                notice = null,
-            )
+    /** 删除刚保存的这张图：记录与文件一起删，避免留下一张没人引用的图占空间。 */
+    fun discardSavedImage() {
+        val current = _state.value.savedImage ?: return
+        viewModelScope.launch {
+            discard(current)
+            _state.update {
+                it.copy(
+                    savedImage = null,
+                    savedNoteId = null,
+                    ocrEditDraft = null,
+                    notice = "已删除这张图片，没有留下记录。",
+                    error = null,
+                )
+            }
         }
     }
 
-    fun reportCancelled() {
-        _state.update { it.copy(notice = "已取消，没有保存任何内容。", error = null) }
+    private suspend fun discard(image: SavedImage) {
+        runCatching { container.captureRepository.delete(image.captureId) }
+        container.mediaStore.deleteQuietly(File(image.path))
     }
+
+    // ---------------- 识别文字的编辑与保存笔记 ----------------
+
+    fun openOcrEdit() {
+        val text = _state.value.savedImage?.ocrText
+        if (text.isNullOrBlank()) {
+            _state.update { it.copy(error = "现在没有可编辑的文字。", notice = null) }
+            return
+        }
+        _state.update { it.copy(ocrEditDraft = text, error = null) }
+    }
+
+    fun onOcrEditChange(value: String) {
+        _state.update { it.copy(ocrEditDraft = value) }
+    }
+
+    fun dismissOcrEdit() {
+        _state.update { it.copy(ocrEditDraft = null) }
+    }
+
+    /**
+     * 保存对识别文字的修改。
+     *
+     * 走 applyUserEdit：它会把 user_edited 置位，之后任何晚到的机器结果都不能覆盖用户改过的文字。
+     */
+    fun saveOcrEdit() {
+        val draft = _state.value.ocrEditDraft ?: return
+        val image = _state.value.savedImage ?: return
+        val trimmed = draft.trim()
+        if (trimmed.isEmpty()) {
+            _state.update { it.copy(error = "文字不能为空；不想保留就删除这张图片。", notice = null) }
+            return
+        }
+        viewModelScope.launch {
+            val done = runCatching { container.captureRepository.applyUserEdit(image.captureId, trimmed) }.isSuccess
+            _state.update {
+                it.copy(
+                    ocrEditDraft = null,
+                    savedImage = if (done) image.copy(ocrText = trimmed, ocrPhase = OcrPhase.DONE) else image,
+                    notice = if (done) "已保存你的修改；之后的识别结果不会覆盖它。" else null,
+                    error = if (done) null else "保存修改失败",
+                )
+            }
+        }
+    }
+
+    /** 打开「保存为笔记」的确认框：标题默认取首个非空行，正文是识别出的全文。 */
+    fun openNoteDraft() {
+        val text = _state.value.savedImage?.ocrText
+        if (text.isNullOrBlank()) {
+            _state.update { it.copy(error = "现在没有可保存为笔记的文字。", notice = null) }
+            return
+        }
+        _state.update {
+            it.copy(noteDraft = NoteDraft(title = titleFromText(text), body = text, sourceLabel = "来自图片识别"), error = null)
+        }
+    }
+
+    fun onNoteDraftTitleChange(value: String) {
+        _state.update { current -> current.copy(noteDraft = current.noteDraft?.copy(title = value)) }
+    }
+
+    fun onNoteDraftBodyChange(value: String) {
+        _state.update { current -> current.copy(noteDraft = current.noteDraft?.copy(body = value)) }
+    }
+
+    fun dismissNoteDraft() {
+        _state.update { it.copy(noteDraft = null) }
+    }
+
+    /**
+     * 保存笔记（完全离线，不写记忆、不建提醒）。
+     *
+     * 两处防连点：savingNote 挡住保存过程中的重复点击；保存成功后草稿立即关闭，
+     * 按钮也换成「打开笔记」，第二次点击没有可点的东西。
+     */
+    fun saveNoteDraft() {
+        val draft = _state.value.noteDraft ?: return
+        if (_state.value.savingNote) return
+        val title = draft.title.trim()
+        val body = draft.body.trim()
+        if (title.isEmpty() || body.isEmpty()) {
+            _state.update { it.copy(error = "标题和正文都要有内容才能保存。", notice = null) }
+            return
+        }
+        val image = _state.value.savedImage
+        viewModelScope.launch {
+            _state.update { it.copy(savingNote = true, error = null) }
+            val noteId = runCatching {
+                container.noteRepository.create(
+                    title = title,
+                    body = body,
+                    originKind = if (image != null) NoteOriginKind.CAPTURE else NoteOriginKind.MANUAL,
+                    // 来源图与捕获记录始终挂着：这条笔记从哪张图来，永远能查回去。
+                    originCaptureId = image?.captureId,
+                    occurredAt = image?.let { Instant.ofEpochMilli(it.savedAtMillis) },
+                    zone = zone,
+                )
+            }.getOrNull()
+            _state.update {
+                it.copy(
+                    savingNote = false,
+                    noteDraft = if (noteId == null) draft else null,
+                    savedNoteId = noteId ?: it.savedNoteId,
+                    notice = if (noteId != null) "已保存为笔记。" else null,
+                    error = if (noteId == null) "保存笔记失败" else null,
+                )
+            }
+        }
+    }
+
+    /** 标题取首个非空行，并限制长度：一段板书的首行常常很长，整句当标题会把列表撑坏。 */
+    private fun titleFromText(text: String): String {
+        val firstLine = text.lineSequence().map { it.trim() }.firstOrNull { it.isNotEmpty() } ?: "未命名笔记"
+        return if (firstLine.length <= TITLE_LIMIT) firstLine else firstLine.take(TITLE_LIMIT) + "…"
+    }
+
+    // ---------------- 录音 ----------------
 
     fun startRecording() {
         val started = runCatching { container.audioRecorder.start() }.getOrDefault(false)
         _state.update {
             if (started) {
-                it.copy(error = null, notice = "正在录音，再次点击停止。", extraction = null, transcript = null)
+                it.copy(error = null, notice = "正在录音，再次点击停止。", transcript = null)
             } else {
                 it.copy(error = "录音启动失败。可能是麦克风被其他应用占用，或系统拒绝了录音权限。", notice = null)
             }
@@ -181,7 +443,17 @@ class CaptureViewModel(private val container: AppContainer) : ViewModel() {
             saved.onFailure { error ->
                 _state.update { it.copy(busy = false, error = error.message ?: "保存录音失败") }
             }.onSuccess { captureId ->
-                _state.update { it.copy(notice = "录音已保存到本机（" + seconds.toString() + " 秒）。") }
+                _state.update {
+                    it.copy(
+                        savedAudio = SavedAudio(
+                            captureId = captureId,
+                            path = file.absolutePath,
+                            seconds = seconds,
+                            savedAtMillis = container.timeSource.now().toEpochMilli(),
+                        ),
+                        notice = "录音已保存到本机（" + seconds.toString() + " 秒），回放一下确认录进去了没有。",
+                    )
+                }
                 transcribe(captureId, file)
                 _state.update { it.copy(busy = false) }
             }
@@ -193,16 +465,150 @@ class CaptureViewModel(private val container: AppContainer) : ViewModel() {
         _state.update { it.copy(notice = "已取消录音，没有保存任何内容。", error = null) }
     }
 
-    /** 文字记录走解析接口。没配后端就到此为止，不伪造结果。 */
-    private suspend fun extract(captureId: String, text: String) {
+    /** 删除刚录的这段音频：记录与文件一起删。 */
+    fun discardSavedAudio() {
+        val current = _state.value.savedAudio ?: return
+        viewModelScope.launch {
+            runCatching { container.captureRepository.delete(current.captureId) }
+            container.mediaStore.deleteQuietly(File(current.path))
+            _state.update { it.copy(savedAudio = null, notice = "已删除这段录音，没有留下记录。", error = null) }
+        }
+    }
+
+    // ---------------- 解析（独立动作 + 确认页） ----------------
+
+    /** 把当前输入框里的文字送去解析。文字会先落库，解析结果进确认页。 */
+    fun extractFromText() {
+        val text = _state.value.text.trim()
+        if (text.isEmpty()) {
+            _state.update { it.copy(error = "输入框里没有文字。可以先写几个字，或对图片点「提取待办」。", notice = null) }
+            return
+        }
+        viewModelScope.launch {
+            _state.update { it.copy(extracting = true, error = null, notice = null) }
+            val captureId = saveTextCapture(text)
+            if (captureId == null) {
+                _state.update { it.copy(extracting = false, error = "保存到本机失败，无法提取。") }
+                return@launch
+            }
+            _state.update { it.copy(text = "") }
+            extractCandidates(captureId, text, ExtractionRequestSource.SourceType.TEXT)
+        }
+    }
+
+    /** 对识别出的图片文字做解析：来源标成 ocr，并挂在同一张图的 capture 上。 */
+    fun extractFromImage() {
+        val image = _state.value.savedImage
+        val text = image?.ocrText?.trim()
+        if (image == null || text.isNullOrEmpty()) {
+            _state.update { it.copy(error = "这张图还没有可解析的文字。", notice = null) }
+            return
+        }
+        viewModelScope.launch {
+            _state.update { it.copy(extracting = true, error = null, notice = null) }
+            extractCandidates(image.captureId, text, ExtractionRequestSource.SourceType.OCR)
+        }
+    }
+
+    fun toggleCandidate(itemId: String) {
+        _state.update { current ->
+            val selected = current.selectedCandidateIds
+            current.copy(
+                selectedCandidateIds = if (itemId in selected) selected - itemId else selected + itemId,
+            )
+        }
+    }
+
+    fun dismissConfirm() {
+        _state.update {
+            it.copy(confirmVisible = false, candidates = emptyList(), selectedCandidateIds = emptySet())
+        }
+    }
+
+    /**
+     * 只保存用户勾选的那些条目。
+     *
+     * 这是整条链路上唯一会写 task / note 的地方：模型给的是候选，用户点的是决定。
+     * 保存后立刻清空候选，所以连点不会写出两份。
+     */
+    fun saveSelectedCandidates() {
+        val current = _state.value
+        if (current.savingCandidates) return
+        val chosen = current.candidates.filter { it.itemId in current.selectedCandidateIds }
+        if (chosen.isEmpty()) {
+            _state.update { it.copy(error = "没有选中任何条目。", notice = null) }
+            return
+        }
+        val captureId = current.extractCaptureId
+        viewModelScope.launch {
+            _state.update { it.copy(savingCandidates = true, error = null) }
+            var tasks = 0
+            var notes = 0
+            var failure: String? = null
+            chosen.forEach { item ->
+                val result = runCatching {
+                    if (item.isTask) {
+                        container.taskRepository.create(
+                            NewTask(
+                                title = item.title,
+                                detail = item.detail,
+                                dueKind = item.dueKind,
+                                dueInstant = item.dueInstant,
+                                dueLocalDate = item.dueLocalDate,
+                                zone = zone,
+                                courseHint = item.courseHint,
+                                originCaptureId = captureId,
+                                originItemId = item.itemId,
+                            ),
+                        )
+                    } else {
+                        container.noteRepository.create(
+                            title = item.title,
+                            body = item.detail ?: item.evidence,
+                            originKind = NoteOriginKind.CAPTURE,
+                            courseHint = item.courseHint,
+                            originCaptureId = captureId,
+                            originItemId = item.itemId,
+                            zone = zone,
+                        )
+                    }
+                }
+                result.onSuccess { if (item.isTask) tasks++ else notes++ }
+                result.onFailure { error -> failure = error.message ?: "写入失败" }
+            }
+            _state.update {
+                it.copy(
+                    savingCandidates = false,
+                    confirmVisible = false,
+                    candidates = emptyList(),
+                    selectedCandidateIds = emptySet(),
+                    notice = "已按你的确认保存：" + notes + " 条笔记、" + tasks + " 条待办。",
+                    error = failure,
+                )
+            }
+        }
+    }
+
+    private suspend fun extractCandidates(
+        captureId: String,
+        text: String,
+        sourceType: ExtractionRequestSource.SourceType,
+    ) {
+        // 没配后端就到此为止，并且说清楚「哪些功能仍然可用」，不把整页都说成不可用。
         if (container.settingsRepository.isPurelyLocal()) {
-            _state.update { it.copy(notice = "已保存到本机，未配置后端，稍后可手动整理。") }
+            _state.update {
+                it.copy(
+                    extracting = false,
+                    error = "没有配置后端地址与令牌，无法提取。图片保存、录音回放与手动保存笔记不受影响。",
+                    notice = null,
+                )
+            }
             return
         }
         container.captureRepository.markExtracting(captureId)
         val request = ExtractionRequest(
             captureId = captureId,
-            source = ExtractionRequestSource(type = ExtractionRequestSource.SourceType.TEXT, text = text),
+            source = ExtractionRequestSource(type = sourceType, text = text),
             recordedAt = DayCueTime.utcString(container.timeSource.now()),
             timezone = zone.id,
         )
@@ -210,25 +616,50 @@ class CaptureViewModel(private val container: AppContainer) : ViewModel() {
             .onSuccess { response ->
                 container.captureRepository.markStatus(captureId, CaptureStatus.EXTRACTED)
                 val items = response.items.map { item ->
-                    ExtractedItemView(
+                    val instant = if (item.due.kind == DueKind.DATETIME) {
+                        DayCueTime.parseInstantOrNull(item.due.utc ?: "")
+                            ?: DayCueTime.parseLocalDateTimeOrNull(item.due.local ?: "", zone)
+                    } else {
+                        null
+                    }
+                    val date = if (item.due.kind == DueKind.DATE) {
+                        DayCueTime.parseLocalDateOrNull(item.due.local ?: "")
+                    } else {
+                        null
+                    }
+                    CandidateItem(
+                        itemId = item.itemId,
+                        isTask = item.kind == ProposalItemKind.TASK,
                         kindName = if (item.kind == ProposalItemKind.TASK) "待办" else "笔记",
                         title = item.title,
+                        detail = item.detail,
+                        evidence = item.sourceEvidence,
+                        dueKind = item.due.kind,
+                        dueInstant = instant,
+                        dueLocalDate = date,
                         dueText = dueText(item.due),
+                        courseHint = item.courseHint,
                         notes = buildList {
                             addAll(item.ambiguities.map { ambiguity -> ambiguity.message })
-                            if (item.isDeadlineOnly) add("只设了截止日，尚未设置提醒时间")
-                            if (item.requiresClarification) add("这条还需要你确认后才能执行")
+                            if (item.isDeadlineOnly) add("只设了截止日，没有提醒时间")
                         },
                     )
                 }
                 _state.update {
                     it.copy(
-                        notice = "解析完成：" + items.size.toString() + " 条候选（" + response.mode.displayName + "）。候选尚未写入待办或笔记，可在对应页面手动整理。",
-                        extraction = ExtractionView(
-                            modeName = response.mode.displayName,
-                            items = items,
-                            warnings = response.warnings,
-                        ),
+                        extracting = false,
+                        extractCaptureId = captureId,
+                        candidates = items,
+                        // 默认全选：用户点「提取待办」的目的就是要整理，
+                        // 但每一条都能取消勾选，保存前也会再报一次数量。
+                        selectedCandidateIds = items.map { item -> item.itemId }.toSet(),
+                        confirmVisible = items.isNotEmpty(),
+                        extractionModeName = response.mode.displayName,
+                        notice = if (items.isEmpty()) {
+                            "解析完成，但没有可确认的条目。"
+                        } else {
+                            "解析出 " + items.size + " 条候选，确认后才会写入。"
+                        },
                     )
                 }
             }
@@ -237,12 +668,15 @@ class CaptureViewModel(private val container: AppContainer) : ViewModel() {
                 container.captureRepository.markStatus(captureId, CaptureStatus.FAILED)
                 _state.update {
                     it.copy(
-                        error = "解析失败：" + (error.message ?: "未知错误") + "（记录已保存到本机，可稍后重试）",
+                        extracting = false,
+                        error = "提取失败：" + (error.message ?: "未知错误") + "（记录已保存到本机，可稍后重试）",
                         notice = null,
                     )
                 }
             }
     }
+
+    // ---------------- 录音转写 ----------------
 
     /** 录音转写。同样先落库：音频文件已经写盘，转写失败只影响文字。 */
     private suspend fun transcribe(captureId: String, file: File) {
@@ -289,8 +723,8 @@ class CaptureViewModel(private val container: AppContainer) : ViewModel() {
             ?.let { raw -> DayCueTime.parseLocalDateOrNull(raw)?.let { date -> DayCueTime.localDateString(date) } }
             ?: "日期缺失"
         DueKind.DATETIME -> {
-            val instant = DayCueTime.parseInstantOrNull(due.utc)
-                ?: DayCueTime.parseLocalDateTimeOrNull(due.local, zone)
+            val instant = DayCueTime.parseInstantOrNull(due.utc ?: "")
+                ?: DayCueTime.parseLocalDateTimeOrNull(due.local ?: "", zone)
             instant?.let { DayCueTime.displayDateTime(it, zone) } ?: "时刻缺失"
         }
     }
@@ -311,6 +745,9 @@ class CaptureViewModel(private val container: AppContainer) : ViewModel() {
     }
 
     companion object {
+        /** 标题长度上限：太长的首行当标题会把列表行撑成一段正文。 */
+        private const val TITLE_LIMIT = 40
+
         fun factory(container: AppContainer): ViewModelProvider.Factory = viewModelFactory {
             initializer { CaptureViewModel(container) }
         }

@@ -226,6 +226,17 @@ func TestNormalizeEmptyItemsIsNotError(t *testing.T) {
 	}
 }
 
+// 合法 JSON 但形状不对（没有 items 数组）不能当成「没有可整理的事项」。
+// 中转类供应商会自己拼提示词，返回 {"intent":...} 这种属于常见偏差；
+// 一旦被当成「空候选」，用户写下的明确待办会静默消失，只能报 model_output_invalid。
+func TestNormalizeNonContractShapeIsError(t *testing.T) {
+	req := baseRequest()
+	raw := `{"intent":"create_reminder","title":"复习操作系统","remind_at":"2026-10-28T20:00:00+08:00","timezone":"Asia/Shanghai"}`
+	if _, err := Normalize(llm.Result{Text: raw, Provider: "stub", Model: "m"}, req, mustTime(t, req.RecordedAt), memLoc(t, req.Timezone), 0); err != ErrModelOutputInvalid {
+		t.Fatalf("缺少 items 数组时必须报 ErrModelOutputInvalid，实得 %v", err)
+	}
+}
+
 func TestExtractPropagatesProviderTimeout(t *testing.T) {
 	req := baseRequest()
 	_, err := Extract(context.Background(), req, errProvider{})

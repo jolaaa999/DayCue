@@ -225,12 +225,28 @@ object ContractErrorCodes {
     const val UPSTREAM_TIMEOUT = "upstream_timeout"
     const val UPSTREAM_ERROR = "upstream_error"
     const val MODEL_OUTPUT_INVALID = "model_output_invalid"
+
+    /**
+     * 服务端「暂时给不出结果」。
+     *
+     * 这个码此前**没有**被列进来，于是所有 503 都落到兜底分支，
+     * 手机上只显示「服务返回错误（service_unavailable）」——
+     * 既看不懂，也指不出真正原因（是没配 AI、还是供应商超时）。
+     */
+    const val SERVICE_UNAVAILABLE = "service_unavailable"
     const val INTERNAL = "internal"
 
     /** 模型输出非法时客户端只能提示「已保留记录」，绝不触发任何系统写操作。 */
     fun isModelOutputInvalid(code: String): Boolean = code == MODEL_OUTPUT_INVALID
 
-    fun userFacingMessage(code: String): String = when (code) {
+    /**
+     * 把错误码翻成人话。
+     *
+     * serverMessage 是服务端返回的 message：**503 优先用它**。
+     * 原因只有服务端自己知道——「没配 AI 供应商」和「供应商超时」都是 503，
+     * 但一个要去配环境变量、一个只要重试，用一句固定的兜底文案等于把区别抹掉了。
+     */
+    fun userFacingMessage(code: String, serverMessage: String? = null): String = when (code) {
         INVALID_REQUEST -> "请求内容不合法，记录已保留。"
         UNAUTHORIZED -> "服务未授权，请检查设置里的 Bearer Token。"
         NOT_FOUND -> "服务接口不存在，请确认版本。"
@@ -242,6 +258,8 @@ object ContractErrorCodes {
         UPSTREAM_ERROR -> "AI 服务出错，已保留记录，可稍后重试。"
         MODEL_OUTPUT_INVALID -> "已保留记录，可稍后重试（模型返回无法解析的结果）。"
         INTERNAL -> "服务内部错误，已保留记录，可稍后重试。"
+        SERVICE_UNAVAILABLE -> serverMessage?.takeIf { it.isNotBlank() }
+            ?: "服务端暂时给不出结果，已保留记录，可稍后重试。"
         else -> "服务返回错误（" + code + "），记录已保留。"
     }
 }
@@ -253,7 +271,8 @@ data class ContractError(
     val retryable: Boolean,
     @SerialName("trace_id") val traceId: String,
 ) {
-    val userFacingMessage: String get() = ContractErrorCodes.userFacingMessage(code)
+    // 把服务端原文一起传下去：503 的具体原因只有服务端知道。
+    val userFacingMessage: String get() = ContractErrorCodes.userFacingMessage(code, message)
 }
 
 @Serializable

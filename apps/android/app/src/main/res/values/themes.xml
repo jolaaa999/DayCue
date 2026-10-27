@@ -4,11 +4,14 @@
       Compose 应用只需要一个「无 ActionBar 的容器主题」。
       这里用平台主题而不是 Theme.Material3.*，是为了不额外引入 com.google.android.material XML 依赖：
       Compose 的 Material3 组件不读 XML 主题，二者相互独立。
+
+      windowBackground 与 Compose 里的 background 保持一致：冷启动那一帧画的是窗口底色，
+      两者不一致会先闪一下白再变深（深色模式下尤其明显）。
     -->
     <style name="Theme.DayCue" parent="android:Theme.Material.Light.NoActionBar">
-        <item name="android:windowBackground">@android:color/white</item>
-        <item name="android:statusBarColor">@android:color/white</item>
-        <item name="android:navigationBarColor">@android:color/white</item>
+        <item name="android:windowBackground">@color/daycue_background</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
         <item name="android:windowLightStatusBar">true</item>
     </style>
 </resources>

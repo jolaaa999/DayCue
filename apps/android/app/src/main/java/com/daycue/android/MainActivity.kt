@@ -8,7 +8,6 @@ import androidx.activity.enableEdgeToEdge
 import androidx.lifecycle.lifecycleScope
 import com.daycue.android.platform.platformDependenciesOrNull
 import com.daycue.android.ui.DayCueApp
-import com.daycue.android.ui.theme.DayCueTheme
 import kotlinx.coroutines.launch
 import java.time.ZoneId
 
@@ -25,10 +24,10 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         // targetSdk 35 起系统强制边到边，主动开启才能拿到 insets 并自己处理，而不是被系统裁切。
         enableEdgeToEdge()
+        // 主题在 DayCueApp 内部按「外观偏好」应用（可能要跟随系统、也可能被用户固定成浅色/深色），
+        // 这里再包一层会让外层永远按系统深色来算，覆盖掉用户的选择。
         setContent {
-            DayCueTheme {
-                DayCueApp()
-            }
+            DayCueApp()
         }
     }
 

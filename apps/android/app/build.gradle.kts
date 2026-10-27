@@ -98,6 +98,8 @@ dependencies {
 
     // HTTP：只用 OkHttp 做传输，它不依赖 GMS，也没有「无 Google 服务就不能用」的问题。
     implementation(libs.okhttp)
+    // 图片文字识别（中文模型随包，离线可用）
+    implementation(libs.mlkit.text.recognition.chinese)
 
     // 定位：刻意不引入 com.google.android.gms:play-services-location。
     // 无 GMS 设备上它会直接抛异常，而本项目要求「没有定位能力时明确降级」。

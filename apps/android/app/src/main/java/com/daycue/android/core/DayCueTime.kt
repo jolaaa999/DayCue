@@ -124,4 +124,73 @@ object DayCueTime {
 
     fun displayDateTime(instant: Instant, zone: ZoneId): String =
         ZonedDateTime.ofInstant(instant, zone).format(LOCAL_MINUTE)
+
+    /**
+     * 页头用的短日期：「10月26日 周日」。
+     *
+     * 不交给 DateTimeFormatter 的本地化模式（"M月d日 EEEE"）：那会跟随系统语言输出
+     * "Oct 26 Sunday" 或 "10月26日 星期日"，页头宽度会随系统语言跳。
+     * 星期用固定中文缩写，长度稳定。
+     */
+    fun displayMonthDayWeekday(instant: Instant, zone: ZoneId): String {
+        val date = ZonedDateTime.ofInstant(instant, zone).toLocalDate()
+        return date.monthValue.toString() + "月" + date.dayOfMonth.toString() + "日 " + weekdayLabel(date.dayOfWeek)
+    }
+
+    /**
+     * 列表里用的「相对日期 + 时刻」：今天 19:30 / 昨天 19:30 / 10月24日 19:30（跨年补年份）。
+     *
+     * 记录行原来只印 HH:mm，隔天的记录和刚写下的一模一样，用户只能靠记忆回推这是哪天的事。
+     * 这里刻意不做「几分钟前」：滚动列表里相对分钟数每刷新一次就变一遍，越读越乱。
+     */
+    fun displayDayTime(instant: Instant, now: Instant, zone: ZoneId): String {
+        val date = localDateOf(instant, zone)
+        val today = localDateOf(now, zone)
+        val day = when (ChronoUnit.DAYS.between(today, date)) {
+            0L -> "今天"
+            -1L -> "昨天"
+            1L -> "明天"
+            else -> if (date.year == today.year) {
+                date.monthValue.toString() + "月" + date.dayOfMonth.toString() + "日"
+            } else {
+                date.year.toString() + "年" + date.monthValue.toString() + "月" + date.dayOfMonth.toString() + "日"
+            }
+        }
+        return day + " " + displayClock(instant, zone)
+    }
+
+    /**
+     * 只到日的短日期：「10月20日」，不是今年时补年份。
+     *
+     * 记忆列表原来直接印 2026-10-20 这种 ISO 串：那是机器写的格式，
+     * 和别处「今天 19:30」「10月20日」的中文日期放在一起会显得像调试信息。
+     */
+    fun displayMonthDay(instant: Instant, now: Instant, zone: ZoneId): String {
+        val date = localDateOf(instant, zone)
+        val today = localDateOf(now, zone)
+        return if (date.year == today.year) {
+            date.monthValue.toString() + "月" + date.dayOfMonth.toString() + "日"
+        } else {
+            date.year.toString() + "年" + date.monthValue.toString() + "月" + date.dayOfMonth.toString() + "日"
+        }
+    }
+
+    /** 两个时刻相差多少分钟（向下取整，to 在过去则为负）。只用于「还有多久」这类展示。 */
+    fun minutesBetween(from: Instant, to: Instant): Long = ChronoUnit.MINUTES.between(from, to)
+
+    /** 只给「同一天内的时段」用的时刻：18:30。跨天时段由调用方加上日期。 */
+    fun displayClock(instant: Instant, zone: ZoneId): String =
+        ZonedDateTime.ofInstant(instant, zone).toLocalTime().format(CLOCK)
+
+    private val CLOCK: DateTimeFormatter = DateTimeFormatter.ofPattern("HH:mm")
+
+    private fun weekdayLabel(dayOfWeek: DayOfWeek): String = when (dayOfWeek) {
+        DayOfWeek.MONDAY -> "周一"
+        DayOfWeek.TUESDAY -> "周二"
+        DayOfWeek.WEDNESDAY -> "周三"
+        DayOfWeek.THURSDAY -> "周四"
+        DayOfWeek.FRIDAY -> "周五"
+        DayOfWeek.SATURDAY -> "周六"
+        DayOfWeek.SUNDAY -> "周日"
+    }
 }

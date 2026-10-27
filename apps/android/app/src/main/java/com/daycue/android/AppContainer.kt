@@ -31,6 +31,7 @@ import com.daycue.android.platform.location.LocationCapabilityProbe
 import com.daycue.android.platform.location.SharedPrefsGeoRuleSwitchMemory
 import com.daycue.android.platform.media.MediaStore
 import com.daycue.android.platform.notify.AndroidGeoNotifier
+import com.daycue.android.platform.ocr.ImageTextRecognizer
 import com.daycue.android.platform.notify.ReminderScheduler
 import com.daycue.android.platform.security.TokenStore
 import com.daycue.android.platform.work.DayCueWorkScheduler
@@ -147,6 +148,9 @@ class AppContainer(context: Context) {
     val reminderScheduler = ReminderScheduler(appContext)
     val workScheduler = DayCueWorkScheduler(appContext)
     val mediaStore = MediaStore(appContext)
+
+    /** 图片文字识别：纯本地能力，没有网络也能用，所以挂在容器上而不是某个页面的 ViewModel 里。 */
+    val imageTextRecognizer = ImageTextRecognizer(appContext)
     val audioRecorder = AudioRecorder(appContext)
     val tokenStore = TokenStore(appContext)
 

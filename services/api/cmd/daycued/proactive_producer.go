@@ -128,7 +128,11 @@ func (s ledgerEnqueueSink) Enqueue(ctx context.Context, c proactive.OutgoingCand
 // newProactiveProducer 组装生产者。source 与 sink 共用同一个 Postgres。
 func newProactiveProducer(cfg config.Config, pg *store.Postgres) (*proactive.Producer, error) {
 	if pg == nil {
-		return nil, fmt.Errorf("主动候选生产者需要数据库连接")
+		// 与 newProactiveRunner 同一套语义：没有数据库就明确「不启动」，而不是拒绝整个进程。
+		// 只跑 AI 端点（/v1/extractions、/v1/transcriptions）的本地开发不需要数据库，
+		// 之前这里返回错误会让 daycued 直接退出，连 health 都打不开。
+		// main 里已经判空（pushProducer != nil），所以返回 nil 不会被用到。
+		return nil, nil
 	}
 	now := time.Now
 	return &proactive.Producer{

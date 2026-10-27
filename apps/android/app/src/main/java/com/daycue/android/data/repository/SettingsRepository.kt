@@ -114,6 +114,20 @@ class SettingsRepository(
 
     fun observeOfflineMode(): Flow<Boolean> = dao.observe(KEY_OFFLINE_MODE).map { it == "1" }
 
+    // ---- 外观 ----
+
+    /**
+     * 外观偏好：跟随系统 / 浅色 / 深色。
+     *
+     * 存原始字符串而不是枚举名：与表里其它设置保持同一种写法，
+     * 将来加档位（例如「只在夜间跟随系统」）不需要动枚举值，也不会让旧值解析失败。
+     */
+    fun observeThemeMode(): Flow<String?> = dao.observe(KEY_UI_THEME)
+
+    suspend fun themeMode(): String? = dao.get(KEY_UI_THEME)
+
+    suspend fun setThemeMode(raw: String) = dao.put(AppSettingRecord(KEY_UI_THEME, raw))
+
     fun observeBackendUrl(): Flow<String?> = dao.observe(KEY_BACKEND_URL)
 
     suspend fun all(): Map<String, String> = dao.listAll().associate { it.key to it.value }
@@ -131,5 +145,6 @@ class SettingsRepository(
         const val KEY_LOCATION_RULES = "location.rules_enabled"
         const val KEY_DEVICE_ID = "device.id"
         const val KEY_LAST_SYNC_AT = "sync.last_at"
+        const val KEY_UI_THEME = "ui.theme_mode"
     }
 }

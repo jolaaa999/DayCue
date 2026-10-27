@@ -62,7 +62,25 @@ data class TodayUiState(
     val outboxPending: Int = 0,
     val pendingCaptures: List<TodayCaptureItem> = emptyList(),
     val notice: String? = null,
-)
+) {
+    /**
+     * 今天是否真的「有事」。
+     *
+     * 刻意不把「同步异常」与「待处理记录」算进来：它们是提示，不是今天要做的事。
+     * 只有一条「2 条记录还在处理」时，页面仍然应该告诉用户「今天还没有安排」，
+     * 否则用户看到的是一片空白加一条提示，反而以为界面没加载完。
+     *
+     * 界面用它决定「铺开各个分区」还是「只给一句引导」：
+     * 上一版把六个分区连同各自的空态一起铺开，首屏全是「今天没有…」，
+     * 而真正有用的两条待办被挤到屏幕外。
+     */
+    val hasContent: Boolean
+        get() = nextCourse != null ||
+            laterCourseHint != null ||
+            dueTodayTasks.isNotEmpty() ||
+            pendingFollowUps.isNotEmpty() ||
+            todayNotes.isNotEmpty()
+}
 
 /**
  * 「今天」页的聚合。

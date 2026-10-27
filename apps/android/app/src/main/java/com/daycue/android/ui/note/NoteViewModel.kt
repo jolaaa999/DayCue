@@ -8,19 +8,70 @@ import androidx.lifecycle.viewmodel.viewModelFactory
 import com.daycue.android.AppContainer
 import com.daycue.android.data.local.entity.NoteRecord
 import com.daycue.android.data.local.entity.TaskRecord
+import com.daycue.android.domain.model.CaptureKind
+import com.daycue.android.domain.model.CaptureStatus
+import com.daycue.android.domain.model.NoteOriginKind
+import java.io.File
+import java.time.Instant
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
+/**
+ * 图片 / 录音记录。
+ *
+ * 这些记录还停在 capture_item 里（没整理成笔记），列表里必须看得见：
+ * 否则用户既无法确认存的是不是那张图，也没有地方删掉选错的那张。
+ * 图片现在带本机 OCR 文字，录音在后端可用时带转写文字——两者都算这条记录的内容。
+ */
+data class MediaCaptureItem(
+    val captureId: String,
+    val kind: CaptureKind,
+    val path: String?,
+    val recordedAt: Instant,
+    val status: CaptureStatus,
+    /** 列表行的预览文字：用户改过的优先，其次转写、OCR，最后是「录音 N 秒」这类摘要。 */
+    val text: String?,
+    /**
+     * 录音的转写全文。
+     *
+     * 单独一个字段而不是复用 text：音频的 raw_text 是「录音 8 秒」这种摘要，
+     * 直接拿来当转写全文显示会把摘要当成转写结果。
+     */
+    val transcriptText: String? = null,
+)
+
 data class NoteListUiState(
     val keyword: String = "",
+    /** 仓储给出的原始结果（最近列表或检索结果），筛选在界面层再套一层。 */
     val notes: List<NoteRecord> = emptyList(),
+    /** 按来源筛选；null 表示「全部」。 */
+    val filter: NoteOriginKind? = null,
     val searching: Boolean = false,
     val loaded: Boolean = false,
     val error: String? = null,
-)
+    /** 列表里「今天/昨天」的基准时刻。由 ViewModel 注入，界面不自己取系统时间。 */
+    val now: Instant? = null,
+    /** 本机的图片 / 录音记录，按时间倒序。 */
+    val mediaCaptures: List<MediaCaptureItem> = emptyList(),
+) {
+    /**
+     * 真正显示出来的记录。
+     *
+     * 为什么在界面层筛而不是回到仓储再查一次：笔记量级很小（最近 100 条），
+     * 换筛选条件时不该再触发一次 LIKE 查询，也不该让「搜索 + 筛选」两个条件
+     * 在两条不同的查询路径上各算一遍，那是最容易出现「搜索结果和筛选结果对不上」的地方。
+     */
+    val visibleNotes: List<NoteRecord>
+        get() = if (filter == null) notes else notes.filter { it.originKind == filter }
+
+    /** 有没有任何记录（不看筛选）：决定空白页是「一条都没有」还是「筛掉了」。 */
+    val trulyEmpty: Boolean
+        get() = loaded && notes.isEmpty() && keyword.isBlank()
+}
 
 /**
  * 记录列表。
@@ -31,7 +82,7 @@ data class NoteListUiState(
  */
 class NoteListViewModel(private val container: AppContainer) : ViewModel() {
 
-    private val _state = MutableStateFlow(NoteListUiState())
+    private val _state = MutableStateFlow(NoteListUiState(now = container.timeSource.now()))
     val state: StateFlow<NoteListUiState> = _state.asStateFlow()
 
     private var recent: List<NoteRecord> = emptyList()
@@ -45,6 +96,57 @@ class NoteListViewModel(private val container: AppContainer) : ViewModel() {
                 }
             }
         }
+        viewModelScope.launch {
+            container.captureRepository.observeRecent(50).collect { captures ->
+                // 只列「还没整理成笔记」的记录。
+                // 判据是状态而不是类型：解析成功的记录（EXTRACTED）已经长成笔记了，
+                // 再列一遍就是同一件事出现两次；而图片、录音、以及没解析成功的文字，
+                // 都还只存在于 capture_item 里，不列出来用户就完全看不到自己存了什么。
+                val media = captures
+                    .filter { it.status != CaptureStatus.EXTRACTED }
+                    .map { record ->
+                        MediaCaptureItem(
+                            captureId = record.id,
+                            kind = record.kind,
+                            path = record.mediaPath,
+                            recordedAt = record.recordedAt,
+                            status = record.status,
+                            text = record.rawText?.takeIf { it.isNotBlank() }
+                                ?: record.ocrText?.takeIf { it.isNotBlank() }
+                                ?: record.transcript?.takeIf { it.isNotBlank() },
+                            transcriptText = record.transcript?.takeIf { it.isNotBlank() },
+                        )
+                    }
+                _state.update { it.copy(mediaCaptures = media) }
+            }
+        }
+    }
+
+    /**
+     * 删掉一条图片 / 录音记录。
+     *
+     * 先删库再删文件：库里的行是「这条记录存在」的唯一凭据，先删文件会让界面短暂出现
+     * 一条指向不存在文件的记录；反过来只会留下一个没人引用的文件，由 deleteQuietly 兜底。
+     */
+    fun deleteCapture(item: MediaCaptureItem) {
+        viewModelScope.launch {
+            runCatching { container.captureRepository.delete(item.captureId) }
+                .onFailure { error ->
+                    _state.update { it.copy(error = error.message ?: "删除失败") }
+                    return@launch
+                }
+            val path = item.path ?: return@launch
+            // 图片是按内容哈希去重的：同一张图选两次会共用同一个文件。
+            // 所以删记录之后要先确认没有别的记录还指向它，否则会把另一条记录变成裂图。
+            val stillUsed = runCatching {
+                container.captureRepository.observeRecent(200).first().any { it.mediaPath == path }
+            }.getOrDefault(true)
+            if (!stillUsed) container.mediaStore.deleteQuietly(File(path))
+        }
+    }
+
+    fun onFilterChange(kind: NoteOriginKind?) {
+        _state.update { it.copy(filter = kind) }
     }
 
     fun onKeywordChange(value: String) {
@@ -85,6 +187,8 @@ data class NoteDetailUiState(
     val busy: Boolean = false,
     val notice: String? = null,
     val error: String? = null,
+    /** 「今天 / 昨天 / 10月20日」的基准时刻，和列表页保持同一套日期写法。 */
+    val now: Instant? = null,
 ) {
     /** 标题或正文被改过才允许保存，避免「点一下保存」把 user_edited 无意义地置位。 */
     val dirty: Boolean
@@ -102,7 +206,7 @@ class NoteDetailViewModel(
     private val noteId: String,
 ) : ViewModel() {
 
-    private val _state = MutableStateFlow(NoteDetailUiState())
+    private val _state = MutableStateFlow(NoteDetailUiState(now = container.timeSource.now()))
     val state: StateFlow<NoteDetailUiState> = _state.asStateFlow()
 
     init {

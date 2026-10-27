@@ -1,5 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <!-- 自适应图标背景色（启动图标由 drawable 里的矢量图提供前景） -->
-    <color name="ic_launcher_background">#1F6FEB</color>
+    <!-- 与 Compose 主题里的 PaperBackground / NightBackground 对应，只用于窗口底色。 -->
+    <color name="daycue_background">#F7F6F1</color>
+
+    <!-- 自适应图标背景色（mipmap-anydpi-v26/ic_launcher.xml 引用）。 -->
+    <color name="ic_launcher_background">#2E6B5C</color>
 </resources>

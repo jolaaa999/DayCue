@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  只在 debug 构建里合并进来：允许明文 HTTP。
+
+  为什么需要：targetSdk 35 从 API 28 起默认禁止明文流量，而后端在局域网里就是
+  http://192.168.x.x:8787（没有 TLS）。不放行的话请求根本发不出去，报错是
+  CLEARTEXT communication ... not permitted by network security policy ——
+  这句话看起来像「网络不通」，实际是本地安全策略在拦，很容易查错方向。
+
+  为什么只放 debug：release 必须保持禁止明文，否则用户数据会以明文上网。
+  这里刻意不去动 main 的清单，避免哪天有人为了联调把放行带进正式包。
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <application android:usesCleartextTraffic="true">
+        <!--
+          调试画廊：只在 debug 包里存在的独立展示场景。
+          用独立 Activity 而不是往主界面加隐藏入口，是为了让 release 包里连这个入口都不存在。
+        -->
+        <activity
+            android:name=".preview.PreviewGalleryActivity"
+            android:exported="true"
+            android:label="DayCue 预览画廊" />
+    </application>
+</manifest>

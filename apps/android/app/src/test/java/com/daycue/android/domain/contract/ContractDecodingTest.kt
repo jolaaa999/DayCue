@@ -141,6 +141,26 @@ class ContractDecodingTest {
         assertEquals("服务返回错误（brand_new_code），记录已保留。", response.error.userFacingMessage)
     }
 
+    // 真机上曾经只显示「服务返回错误（service_unavailable）」，
+    // 用户完全看不出是后端没配 AI 供应商。503 必须把服务端的原因透出来。
+    @Test
+    fun serviceUnavailableSurfacesTheServerReason() {
+        val json = """
+            { "error": { "code": "service_unavailable", "message": "服务端尚未配置 AI 供应商，无法解析。", "retryable": true, "trace_id": "t-3" } }
+        """.trimIndent()
+        val response = DayCueJson.decodeFromString(ErrorResponse.serializer(), json)
+        assertEquals("服务端尚未配置 AI 供应商，无法解析。", response.error.userFacingMessage)
+    }
+
+    @Test
+    fun serviceUnavailableFallsBackWhenServerSendsNoReason() {
+        val json = """
+            { "error": { "code": "service_unavailable", "message": "   ", "retryable": true, "trace_id": "t-4" } }
+        """.trimIndent()
+        val response = DayCueJson.decodeFromString(ErrorResponse.serializer(), json)
+        assertTrue(response.error.userFacingMessage.contains("暂时给不出结果"))
+    }
+
     @Test
     fun requestEncodingOmitsNullsAndKeepsSchemaVersion() {
         val request = ExtractionRequest(
