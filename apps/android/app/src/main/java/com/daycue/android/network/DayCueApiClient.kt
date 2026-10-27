@@ -15,7 +15,18 @@ import java.io.IOException
  * 带 retryable 是为了让调用方（outbox worker）能区分「换个时间再来」和「这条请求本身有问题」，
  * 但这里绝不自动重试：失败之后怎么办属于业务决策，传输层不替业务做决定。
  */
-class DayCueApiException(message: String, val retryable: Boolean = false) : Exception(message)
+/**
+ * 调用后端的异常。
+ *
+ * code 只有「服务端返回了契约错误体」时才有值：界面要靠它区分
+ * 「服务端没配置某项能力（503 service_unavailable）」和「网络根本不通」——
+ * 前者去设置里补配置，后者过一会儿再试，两者不该显示成同一句话。
+ */
+class DayCueApiException(
+    message: String,
+    val retryable: Boolean = false,
+    val code: String? = null,
+) : Exception(message)
 
 /**
  * DayCue 后端客户端。
@@ -200,7 +211,11 @@ class DayCueApiClient(
             null
         }
         if (parsed != null) {
-            throw DayCueApiException(parsed.error.userFacingMessage, retryable = parsed.error.retryable)
+            throw DayCueApiException(
+                message = parsed.error.userFacingMessage,
+                retryable = parsed.error.retryable,
+                code = parsed.error.code,
+            )
         }
         throw DayCueApiException(
             message = "服务返回了无法识别的错误",

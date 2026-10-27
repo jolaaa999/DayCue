@@ -118,9 +118,9 @@ func Normalize(out llm.Result, req Request, recordedAt time.Time, loc *time.Loca
 	if err != nil {
 		return Response{}, err
 	}
-	// 合法 JSON 不等于合契约 JSON。有些供应商（尤其是中转层会自己拼提示词的）
-	// 会返回 {"intent":"...","remind_at":"..."} 这类别的形状；如果只按「items 为空」处理，
-	// 界面就会显示「这段内容里没有可整理的明确事项」，把用户明确写下的待办说成没内容。
+	// 合法 JSON 不等于合契约 JSON。已遇到的实际情形：端点返回 {"intent":"...","remind_at":"..."}
+	// 这类自造结构的 JSON；如果只按「items 为空」处理，界面就会显示
+	// 「这段内容里没有可整理的明确事项」，把用户明确写下的待办说成没内容。
 	// 这里要求顶层必须有 items 数组，否则按「模型输出无法结构化」报错，记录保留、可重试。
 	if !hasItemsArray(out.Text) {
 		return Response{}, ErrModelOutputInvalid

@@ -9,7 +9,9 @@ import androidx.lifecycle.viewmodel.viewModelFactory
 import com.daycue.android.AppContainer
 import com.daycue.android.core.DayCueTime
 import com.daycue.android.data.repository.NewTask
+import com.daycue.android.network.DayCueApiException
 import com.daycue.android.domain.contract.ContractDue
+import com.daycue.android.domain.contract.ContractErrorCodes
 import com.daycue.android.domain.contract.ExtractionRequest
 import com.daycue.android.domain.contract.ExtractionRequestSource
 import com.daycue.android.domain.model.CaptureStatus
@@ -89,6 +91,38 @@ data class CandidateItem(
     val notes: List<String>,
 )
 
+/**
+ * 「提取待办」要解析哪一条。
+ *
+ * 关键是 captureId 必须明确：
+ * - 输入框有字：这是新内容，还没有对应记录（needsSave=true），落库后再解析；
+ * - 输入框空了但刚保存过：直接用那条记录，captureId 就是它的 id；
+ * - 两者都没有：null，界面如实说没东西可提取，不去猜。
+ */
+internal data class ExtractTarget(
+    val captureId: String?,
+    val text: String,
+    val needsSave: Boolean,
+)
+
+/** 解析目标的选择规则。抽成纯函数便于回归验证：绑定错记录比报错更糟。 */
+internal fun resolveExtractTarget(typed: String, saved: SavedText?): ExtractTarget? {
+    val trimmed = typed.trim()
+    return when {
+        trimmed.isNotEmpty() -> ExtractTarget(captureId = null, text = trimmed, needsSave = true)
+        saved != null -> ExtractTarget(captureId = saved.captureId, text = saved.text, needsSave = false)
+        else -> null
+    }
+}
+
+/**
+ * 用户一开始写新内容，之前那条「刚保存」的绑定就必须失效。
+ *
+ * 否则会出现最难查的那类错：输入框里明明是 B，点提取却解析了上一次的 A。
+ */
+internal fun savedTextAfterEdit(typed: String, saved: SavedText?): SavedText? =
+    if (typed.isNotBlank()) null else saved
+
 data class CaptureUiState(
     val text: String = "",
     val isRecording: Boolean = false,
@@ -153,7 +187,9 @@ class CaptureViewModel(private val container: AppContainer) : ViewModel() {
     }
 
     fun onTextChange(value: String) {
-        _state.update { it.copy(text = value, error = null, notice = null) }
+        _state.update {
+            it.copy(text = value, error = null, notice = null, savedText = savedTextAfterEdit(value, it.savedText))
+        }
     }
 
     fun clearMessages() {
@@ -233,6 +269,9 @@ class CaptureViewModel(private val container: AppContainer) : ViewModel() {
                     savedImage = null,
                     savedNoteId = null,
                     ocrEditDraft = null,
+                    // 切到图片输入后，之前那条文字记录的绑定作废：
+                    // 免得「提取待办」把上一轮存下的文字又解析一遍。
+                    savedText = null,
                 )
             }
             val file = runCatching { container.mediaStore.persistPickedImage(uri) }.getOrNull()
@@ -491,28 +530,40 @@ class CaptureViewModel(private val container: AppContainer) : ViewModel() {
 
     /** 把当前输入框里的文字送去解析。文字会先落库，解析结果进确认页。 */
     fun extractFromText() {
-        val typed = _state.value.text.trim()
-        val saved = _state.value.savedText
-        // 三种情况分开处理：输入框有字 → 先落库再解析；输入框空了但刚保存过 → 直接解析那条；
-        // 两者都没有 → 如实说没东西可提取，不去猜用户想解析哪一条。
-        if (typed.isEmpty() && saved == null) {
+        val target = resolveExtractTarget(_state.value.text, _state.value.savedText)
+        if (target == null) {
             _state.update { it.copy(error = "这里没有可解析的文字。先写几个字，或对图片点「提取待办」。", notice = null) }
             return
         }
         viewModelScope.launch {
             _state.update { it.copy(extracting = true, error = null, notice = null) }
-            if (typed.isEmpty()) {
-                val kept = requireNotNull(saved)
-                extractCandidates(kept.captureId, kept.text, ExtractionRequestSource.SourceType.TEXT)
+            if (!target.needsSave) {
+                val captureId = requireNotNull(target.captureId)
+                // 记录可能在别处被删掉了：这时候不能拿一个不存在的 capture 去解析，
+                // 否则解析出来的候选会挂在一个悬空的来源上。
+                if (container.captureRepository.find(captureId) == null) {
+                    _state.update {
+                        it.copy(
+                            extracting = false,
+                            savedText = null,
+                            error = "那条记录已经被删除了。重新写一遍，或对图片点「提取待办」。",
+                        )
+                    }
+                    return@launch
+                }
+                // 用过一次就解开绑定：同一条记录重复解析只会产生重复候选。
+                _state.update { it.copy(savedText = null) }
+                extractCandidates(captureId, target.text, ExtractionRequestSource.SourceType.TEXT)
                 return@launch
             }
-            val captureId = saveTextCapture(typed)
+            val captureId = saveTextCapture(target.text)
             if (captureId == null) {
                 _state.update { it.copy(extracting = false, error = "保存到本机失败，无法提取。") }
                 return@launch
             }
-            _state.update { it.copy(text = "", savedText = SavedText(captureId = captureId, text = typed)) }
-            extractCandidates(captureId, typed, ExtractionRequestSource.SourceType.TEXT)
+            // 落库后立刻清空输入框并记住这条记录，两个动作可以连着点。
+            _state.update { it.copy(text = "", savedText = SavedText(captureId = captureId, text = target.text)) }
+            extractCandidates(captureId, target.text, ExtractionRequestSource.SourceType.TEXT)
         }
     }
 
@@ -723,6 +774,18 @@ class CaptureViewModel(private val container: AppContainer) : ViewModel() {
                 )
             }
         }.onFailure { error ->
+            // 服务端明确说「没有配置转写供应商」时不改记录状态、也不说成失败：
+            // 这不是这条录音的数据出了问题，而是能力没配；录音照样能回放、能手动整理。
+            val notConfigured = (error as? DayCueApiException)?.code == ContractErrorCodes.SERVICE_UNAVAILABLE
+            if (notConfigured) {
+                _state.update {
+                    it.copy(
+                        notice = "录音已保存到本机，可回放。服务端还没配置语音转写，配好之后可以再转写。",
+                        error = null,
+                    )
+                }
+                return@onFailure
+            }
             container.captureRepository.markStatus(captureId, CaptureStatus.FAILED)
             _state.update {
                 it.copy(

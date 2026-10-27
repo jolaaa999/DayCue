@@ -5,6 +5,9 @@ import com.daycue.android.data.local.entity.NoteRecord
 import com.daycue.android.data.local.entity.TaskRecord
 import com.daycue.android.domain.model.DueKind
 import com.daycue.android.domain.model.NoteOriginKind
+import com.daycue.android.ui.capture.SavedText
+import com.daycue.android.ui.capture.resolveExtractTarget
+import com.daycue.android.ui.capture.savedTextAfterEdit
 import com.daycue.android.ui.note.NoteListUiState
 import com.daycue.android.ui.settings.hostOf
 import com.daycue.android.ui.theme.ThemeMode
@@ -179,6 +182,44 @@ class RedesignedScreensLogicTest {
         // 课程卡的「40 分钟后」直接来自这个差值，正负号不能反。
         assertEquals(40L, DayCueTime.minutesBetween(now, instantAt(zone, 2026, 10, 26, 20, 55)))
         assertEquals(-15L, DayCueTime.minutesBetween(now, instantAt(zone, 2026, 10, 26, 20, 0)))
+    }
+
+
+    // ---- 记一笔：「保存后提取」必须绑到明确的那条记录 ----
+
+    @Test
+    fun extractTargetPrefersWhatUserJustTyped() {
+        // 输入框有字时永远解析新内容，哪怕手边还留着上一次的绑定。
+        val target = resolveExtractTarget(
+            typed = "  周五前交报告 ",
+            saved = SavedText(captureId = "cap_old", text = "上一次的文字"),
+        )
+        assertEquals("周五前交报告", target?.text)
+        assertEquals(null, target?.captureId)
+        assertTrue(target!!.needsSave)
+    }
+
+    @Test
+    fun extractTargetFallsBackToTheSavedCapture() {
+        val target = resolveExtractTarget(typed = "", saved = SavedText(captureId = "cap_1", text = "已经存好的文字"))
+        assertEquals("cap_1", target?.captureId)
+        assertEquals("已经存好的文字", target?.text)
+        assertFalse(target!!.needsSave)
+    }
+
+    @Test
+    fun extractTargetIsNullWithoutAnyText() {
+        // 什么都没写、也没有刚保存的记录：给 null，让界面如实说「没有可解析的文字」。
+        assertEquals(null, resolveExtractTarget(typed = "   ", saved = null))
+    }
+
+    @Test
+    fun typingNewTextDropsTheSavedBinding() {
+        val saved = SavedText(captureId = "cap_1", text = "上一次的文字")
+        // 开始写新内容 → 旧绑定作废，避免「输入框是 B、解析的却是 A」。
+        assertEquals(null, savedTextAfterEdit("新的内容", saved))
+        // 只是清空输入框（比如刚保存完）时绑定要保留，否则两个动作串不起来。
+        assertEquals(saved, savedTextAfterEdit("   ", saved))
     }
 
     private fun instantAt(zone: ZoneId, year: Int, month: Int, day: Int, hour: Int, minute: Int): Instant =

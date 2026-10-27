@@ -27,9 +27,10 @@ const systemPrompt = `你是 DayCue 的信息整理引擎，把用户随手记�
 
 // outputContractReminder 是**必须随每条 user 消息一起发出去**的最小输出要求。
 //
-// 为什么不能只写在 system 里：实测有的 OpenAI-compatible 中转会把 system 消息整条丢掉，
-// 模型只看到原文，于是按自己的默认模板作答——返回 {"intent":"create_reminder",…} 这种
-// 看起来像 JSON、但完全不是契约的形状。把要点复述在 user 消息里，这类端点才能正常工作；
+// 为什么不能只写在 system 里：这是已复现的端点兼容性问题——把契约放在 system 消息里时，
+// 同一个端点返回的是 {"intent":"create_reminder",…} 这种自造结构的 JSON；同一份指令改放到
+// user 消息里，输出立刻符合契约。中转内部怎么处理消息我们看不到，也不去猜；这里只按
+// 「哪种请求形状在这个端点上能得到合格输出」来定。
 // 对正常端点只是几行冗余指令，不影响结果。
 const outputContractReminder = `
 输出要求（服务端会严格校验，不符合即判为失败）：
