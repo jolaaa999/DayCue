@@ -42,6 +42,12 @@ data class SavedImage(
     val ocrText: String? = null,
 )
 
+/** 刚保存到本机的文字记录。留着它是为了让「先保存、再提取待办」这两下点得通。 */
+data class SavedText(
+    val captureId: String,
+    val text: String,
+)
+
 /** 刚保存到本机的录音。 */
 data class SavedAudio(
     val captureId: String,
@@ -95,6 +101,8 @@ data class CaptureUiState(
     val savedImage: SavedImage? = null,
     /** 刚录的音；null 表示这次还没有录音。 */
     val savedAudio: SavedAudio? = null,
+    /** 刚保存的文字记录：输入框已经清空后，仍然能对这条记录做「提取待办」。 */
+    val savedText: SavedText? = null,
     /** 待确认的笔记草稿；null 表示没有打开保存笔记的确认框。 */
     val noteDraft: NoteDraft? = null,
     /** 正在写笔记：防止连点写出两条一模一样的笔记。 */
@@ -186,12 +194,16 @@ class CaptureViewModel(private val container: AppContainer) : ViewModel() {
                 it.copy(
                     busy = false,
                     text = "",
+                    // 不再把状态显示名拼进来：LOCAL 的显示名本身就是「已保存到本机」，
+                    // 拼在一起会读成「已保存到本机（已保存到本机）」。
                     notice = if (captureId == null) {
                         "保存到本机失败。"
                     } else {
-                        "已保存到本机（" + CaptureStatus.LOCAL.displayName + "）。需要整理成笔记或待办时点「提取待办」。"
+                        "已保存到本机。要整理成笔记或待办，点「提取待办」。"
                     },
                     error = if (captureId == null) "保存到本机失败" else null,
+                    // 保存后输入框清空，但这条记录还在：接下来点「提取待办」要能直接用它。
+                    savedText = captureId?.let { SavedText(captureId = it, text = text) } ?: it.savedText,
                 )
             }
         }
@@ -479,20 +491,28 @@ class CaptureViewModel(private val container: AppContainer) : ViewModel() {
 
     /** 把当前输入框里的文字送去解析。文字会先落库，解析结果进确认页。 */
     fun extractFromText() {
-        val text = _state.value.text.trim()
-        if (text.isEmpty()) {
-            _state.update { it.copy(error = "输入框里没有文字。可以先写几个字，或对图片点「提取待办」。", notice = null) }
+        val typed = _state.value.text.trim()
+        val saved = _state.value.savedText
+        // 三种情况分开处理：输入框有字 → 先落库再解析；输入框空了但刚保存过 → 直接解析那条；
+        // 两者都没有 → 如实说没东西可提取，不去猜用户想解析哪一条。
+        if (typed.isEmpty() && saved == null) {
+            _state.update { it.copy(error = "这里没有可解析的文字。先写几个字，或对图片点「提取待办」。", notice = null) }
             return
         }
         viewModelScope.launch {
             _state.update { it.copy(extracting = true, error = null, notice = null) }
-            val captureId = saveTextCapture(text)
+            if (typed.isEmpty()) {
+                val kept = requireNotNull(saved)
+                extractCandidates(kept.captureId, kept.text, ExtractionRequestSource.SourceType.TEXT)
+                return@launch
+            }
+            val captureId = saveTextCapture(typed)
             if (captureId == null) {
                 _state.update { it.copy(extracting = false, error = "保存到本机失败，无法提取。") }
                 return@launch
             }
-            _state.update { it.copy(text = "") }
-            extractCandidates(captureId, text, ExtractionRequestSource.SourceType.TEXT)
+            _state.update { it.copy(text = "", savedText = SavedText(captureId = captureId, text = typed)) }
+            extractCandidates(captureId, typed, ExtractionRequestSource.SourceType.TEXT)
         }
     }
 
