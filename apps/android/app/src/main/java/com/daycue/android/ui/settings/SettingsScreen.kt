@@ -9,6 +9,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Build
 import androidx.compose.material.icons.outlined.DateRange
+import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.Lock
 import androidx.compose.material.icons.outlined.Notifications
@@ -52,6 +53,7 @@ fun SettingsScreen(
     onOpenAppearance: () -> Unit,
     onOpenData: () -> Unit,
     onOpenAdvanced: () -> Unit,
+    onOpenAssistant: () -> Unit,
 ) {
     val container = rememberContainer()
     val viewModel: SettingsViewModel = viewModel(factory = remember(container) { SettingsViewModel.factory(container) })
@@ -73,6 +75,7 @@ fun SettingsScreen(
         onOpenAppearance = onOpenAppearance,
         onOpenData = onOpenData,
         onOpenAdvanced = onOpenAdvanced,
+        onOpenAssistant = onOpenAssistant,
     )
 }
 
@@ -88,6 +91,7 @@ fun SettingsHomeContent(
     onOpenAppearance: () -> Unit,
     onOpenData: () -> Unit,
     onOpenAdvanced: () -> Unit,
+    onOpenAssistant: () -> Unit,
 ) {
     val grantedCount = listOf(
         state.recordingGranted,
@@ -157,6 +161,20 @@ fun SettingsHomeContent(
                         },
                         icon = Icons.Outlined.DateRange,
                         onClick = onOpenTerm,
+                    )
+                }
+            }
+
+            item {
+                GroupLabel("悬浮球与语音")
+                SettingGroup {
+                    NavigationRow(
+                        title = "悬浮球与语音",
+                        // 摘要只给结论：这一页里既有可能已开启的悬浮球，也有还没上线的语音唤醒，
+                        // 把两者都写进副标题会变成一句话读不完。
+                        subtitle = "从任意界面展开扇区菜单 · 语音唤醒待接入",
+                        icon = Icons.Outlined.Info,
+                        onClick = onOpenAssistant,
                     )
                 }
             }

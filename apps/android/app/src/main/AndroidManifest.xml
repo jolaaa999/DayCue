@@ -23,6 +23,16 @@
     <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
     <!-- 重启后重建已安排的本地提醒；没有它，重启会让所有提醒静默消失 -->
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <!--
+      桌面悬浮球：SYSTEM_ALERT_WINDOW 是特殊权限，没有系统弹窗，只能由用户去设置页手动授予。
+      未授予时悬浮球开关不会生效，设置页会如实显示「未授权」并给出跳转入口。
+    -->
+    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
+    <!-- 悬浮球必须常驻，普通后台服务会被系统回收，所以用前台服务 + 常驻通知 -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <!-- Android 14+ 要求声明前台服务类型对应的权限；悬浮球归 specialUse（已声明用途子类型） -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+
     <!-- 定位：只用于用户显式开启的地点规则；不做后台连续定位，因此不申请 ACCESS_BACKGROUND_LOCATION -->
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
@@ -85,6 +95,21 @@
         <receiver
             android:name=".platform.notify.ProactiveReceiptReceiver"
             android:exported="false" />
+
+        <!--
+          桌面悬浮球的服务。
+          foregroundServiceType=specialUse：悬浮球既不是定位、也不是媒体播放或麦克风，
+          系统没有更贴切的类型，只能按 specialUse 声明并写清用途（Android 14+ 必须带 property）。
+          刻意不在这里加 android:exported="true" 或任何 intent-filter：它只由本应用启动。
+        -->
+        <service
+            android:name=".platform.overlay.FloatingBallService"
+            android:exported="false"
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="桌面悬浮球：让用户从任意界面展开扇区菜单快速记录与跳转" />
+        </service>
 
         <!-- 重启后重建闹钟与 WorkManager 周期作业 -->
         <receiver

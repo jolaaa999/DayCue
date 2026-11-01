@@ -12,9 +12,12 @@ import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.NavigationBarItemDefaults
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
+import android.util.Log
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.unit.dp
@@ -25,6 +28,8 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
 import com.daycue.android.ui.capture.CaptureScreen
 import com.daycue.android.ui.common.DayCueIcons
 import com.daycue.android.ui.followup.FollowUpScreen
@@ -40,6 +45,7 @@ import com.daycue.android.ui.schedule.ScheduleWeekScreen
 import com.daycue.android.ui.settings.SettingsAccountScreen
 import com.daycue.android.ui.settings.SettingsAdvancedScreen
 import com.daycue.android.ui.settings.SettingsAppearanceScreen
+import com.daycue.android.ui.settings.SettingsAssistantScreen
 import com.daycue.android.ui.settings.SettingsDataScreen
 import com.daycue.android.ui.settings.SettingsLocationScreen
 import com.daycue.android.ui.settings.SettingsPermissionsScreen
@@ -73,6 +79,9 @@ object DayCueRoutes {
     const val SETTINGS_APPEARANCE = "settings/appearance"
     const val SETTINGS_DATA = "settings/data"
     const val SETTINGS_ADVANCED = "settings/advanced"
+
+    /** 桌面悬浮球与（后续的）语音唤醒设置。 */
+    const val SETTINGS_ASSISTANT = "settings/assistant"
 
     /**
      * 记录页带一个 intent 参数，用来表达「用户点的是哪一个入口」。
@@ -137,7 +146,16 @@ private val BOTTOM_ENTRIES = listOf(
  * 固定成浅色之后，App 就不该再跟着系统跳。读取是流式的，切主题不需要重启。
  */
 @Composable
-fun DayCueApp() {
+fun DayCueApp(
+    /**
+     * 外部（目前只有悬浮球）请求落到哪一页。null 表示没有待处理请求。
+     *
+     * 用 Flow 而不是构造参数里的字符串：Activity 可能已经在运行，
+     * 后续请求要靠 onNewIntent 再次推过来，字符串参数接不住第二次。
+     */
+    pendingRoute: StateFlow<String?>? = null,
+    onRouteConsumed: () -> Unit = {},
+) {
     val container = rememberContainer()
     val rawMode by container.settingsRepository.observeThemeMode().collectAsState(initial = null)
     val mode = ThemeMode.fromRaw(rawMode)
@@ -233,6 +251,7 @@ fun DayCueApp() {
                         onOpenAppearance = { navController.navigate(DayCueRoutes.SETTINGS_APPEARANCE) },
                         onOpenData = { navController.navigate(DayCueRoutes.SETTINGS_DATA) },
                         onOpenAdvanced = { navController.navigate(DayCueRoutes.SETTINGS_ADVANCED) },
+                        onOpenAssistant = { navController.navigate(DayCueRoutes.SETTINGS_ASSISTANT) },
                     )
                 }
 
@@ -276,6 +295,10 @@ fun DayCueApp() {
 
                 composable(DayCueRoutes.SETTINGS_ADVANCED) {
                     SettingsAdvancedScreen(onBack = { navController.popBackStack() })
+                }
+
+                composable(DayCueRoutes.SETTINGS_ASSISTANT) {
+                    SettingsAssistantScreen(onBack = { navController.popBackStack() })
                 }
 
                 composable(
@@ -377,6 +400,16 @@ fun DayCueApp() {
                     )
                 }
             }
+        }
+
+        // 悬浮球等外部入口带进来的路由。
+        // 放在 Scaffold 之后：此时 NavHost 已经完成组合，navigate 不会因为「导航图还没建好」抛异常。
+        val requestedRoute by (pendingRoute ?: remember { MutableStateFlow<String?>(null) }).collectAsState()
+        LaunchedEffect(requestedRoute) {
+            val route = requestedRoute ?: return@LaunchedEffect
+            runCatching { navController.navigate(route) }
+                .onFailure { Log.w("DayCueApp", "外部路由跳转失败：" + route, it) }
+            onRouteConsumed()
         }
     }
 }

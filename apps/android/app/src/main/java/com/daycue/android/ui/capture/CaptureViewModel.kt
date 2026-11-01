@@ -1,6 +1,7 @@
 package com.daycue.android.ui.capture
 
 import android.net.Uri
+import android.os.SystemClock
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
@@ -20,10 +21,13 @@ import com.daycue.android.domain.model.NoteOriginKind
 import com.daycue.android.domain.model.ProposalItemKind
 import com.daycue.android.platform.ocr.OcrOutcome
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
@@ -170,18 +174,23 @@ class CaptureViewModel(private val container: AppContainer) : ViewModel() {
 
     private val zone: ZoneId = ZoneId.systemDefault()
 
+    /** 系统听写进行中：录音机的状态流此时必须让位，见 init 里的采集器。 */
+    private var speechActive = false
+    private var speechTicker: Job? = null
+
     private val _state = MutableStateFlow(CaptureUiState())
     val state: StateFlow<CaptureUiState> = _state.asStateFlow()
 
     init {
         viewModelScope.launch {
             container.audioRecorder.isRecording.collect { recording ->
-                _state.update { it.copy(isRecording = recording) }
+                // 系统听写占用同一个"正在录音"界面位，此时不能用录音机的状态把它覆盖掉。
+                if (!speechActive) _state.update { it.copy(isRecording = recording) }
             }
         }
         viewModelScope.launch {
             container.audioRecorder.elapsedSeconds.collect { seconds ->
-                _state.update { it.copy(elapsedSeconds = seconds) }
+                if (!speechActive) _state.update { it.copy(elapsedSeconds = seconds) }
             }
         }
     }
@@ -470,6 +479,11 @@ class CaptureViewModel(private val container: AppContainer) : ViewModel() {
     // ---------------- 录音 ----------------
 
     fun startRecording() {
+        // 优先系统听写：本机有识别服务时就不用上传音频，也不需要后端配置 ASR。
+        if (runCatching { container.systemSpeechInput.isAvailable() }.getOrDefault(false)) {
+            startSpeechListening()
+            return
+        }
         val started = runCatching { container.audioRecorder.start() }.getOrDefault(false)
         _state.update {
             if (started) {
@@ -481,6 +495,12 @@ class CaptureViewModel(private val container: AppContainer) : ViewModel() {
     }
 
     fun stopRecording() {
+        // 系统听写没有音频文件，停在这里等系统回最终结果，交给 finishSpeech 落库。
+        if (speechActive) {
+            runCatching { container.systemSpeechInput.stop() }
+            _state.update { it.copy(notice = "正在识别…") }
+            return
+        }
         viewModelScope.launch {
             // 秒数必须在 stop() 之前读：停止后计时会被重置。
             val seconds = _state.value.elapsedSeconds
@@ -512,8 +532,89 @@ class CaptureViewModel(private val container: AppContainer) : ViewModel() {
     }
 
     fun cancelRecording() {
+        if (speechActive) {
+            runCatching { container.systemSpeechInput.cancel() }
+            endSpeechSession()
+            _state.update { it.copy(isRecording = false, elapsedSeconds = 0, transcript = null, notice = "已取消听写，没有保存任何内容。", error = null) }
+            return
+        }
         runCatching { container.audioRecorder.cancel() }
         _state.update { it.copy(notice = "已取消录音，没有保存任何内容。", error = null) }
+    }
+
+    // ---------------- 系统听写 ----------------
+
+    /** 听写进行中：与录音共用 isRecording / elapsedSeconds，界面无需区分两条通道。 */
+    private fun startSpeechListening() {
+        speechActive = true
+        _state.update {
+            it.copy(
+                isRecording = true,
+                elapsedSeconds = 0,
+                busy = false,
+                error = null,
+                transcript = null,
+                notice = "正在听写，说完点「停止并保存」。",
+            )
+        }
+        speechTicker?.cancel()
+        speechTicker = viewModelScope.launch {
+            val startedAt = SystemClock.elapsedRealtime()
+            while (isActive) {
+                delay(500)
+                _state.update { it.copy(elapsedSeconds = (SystemClock.elapsedRealtime() - startedAt) / 1000L) }
+            }
+        }
+        runCatching {
+            container.systemSpeechInput.start(
+                onPartial = { text -> _state.update { it.copy(transcript = text) } },
+                onFinal = { text -> finishSpeech(text, null) },
+                onError = { message -> finishSpeech(null, message) },
+            )
+        }.onFailure { error ->
+            finishSpeech(null, "系统听写启动失败：" + (error.message ?: "未知原因"))
+        }
+    }
+
+    private fun endSpeechSession() {
+        speechActive = false
+        speechTicker?.cancel()
+        speechTicker = null
+    }
+
+    /**
+     * 听写收尾。成功就把文字当成一条普通文字记录落库——
+     * 这样"提取待办"走的是同一条已验证过的路径，不需要为语音新开一套解析逻辑。
+     */
+    private fun finishSpeech(text: String?, failure: String?) {
+        if (!speechActive) return
+        endSpeechSession()
+        _state.update { it.copy(isRecording = false) }
+        val clean = text?.trim().orEmpty()
+        if (clean.isEmpty()) {
+            _state.update {
+                it.copy(
+                    error = "语音听写没有结果：" + (failure ?: "未知原因") + " 可以重试，或改用文字输入。",
+                    notice = null,
+                )
+            }
+            return
+        }
+        viewModelScope.launch {
+            val captureId = runCatching { container.captureRepository.saveText(clean, zone) }.getOrNull()
+            if (captureId == null) {
+                _state.update { it.copy(transcript = clean, error = "听写成功但保存到本机失败。", notice = null) }
+                return@launch
+            }
+            _state.update {
+                it.copy(
+                    transcript = clean,
+                    error = null,
+                    savedText = SavedText(captureId = captureId, text = clean),
+                    notice = "语音识别完成（系统听写），点「提取待办」整理成待办或笔记。",
+                )
+            }
+        }
     }
 
     /** 删除刚录的这段音频：记录与文件一起删。 */
@@ -824,6 +925,8 @@ class CaptureViewModel(private val container: AppContainer) : ViewModel() {
 
     override fun onCleared() {
         // 离开页面时不能让麦克风继续被占用：录音必须显式取消，而不是等系统回收。
+        if (speechActive) runCatching { container.systemSpeechInput.cancel() }
+        endSpeechSession()
         if (_state.value.isRecording) runCatching { container.audioRecorder.cancel() }
     }
 

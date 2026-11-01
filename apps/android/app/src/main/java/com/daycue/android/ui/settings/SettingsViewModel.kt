@@ -245,6 +245,11 @@ class SettingsViewModel(private val container: AppContainer) : ViewModel() {
     }
 
     fun saveTerm(firstMondayText: String, weeksText: String) {
+        // 空值和写错格式分开报，否则用户不知道是「没填」还是「填错了」（ISSUE-20261029-032）
+        if (firstMondayText.isBlank()) {
+            _state.update { it.copy(error = "请先填学期第一周的周一，例如 2026-09-07（必须是周一）") }
+            return
+        }
         val date = runCatching { java.time.LocalDate.parse(firstMondayText.trim()) }.getOrNull()
         if (date == null) {
             _state.update { it.copy(error = "学期第一周的周一需要写成 2026-09-07 这样的日期") }

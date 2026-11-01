@@ -135,9 +135,17 @@ class ScheduleViewModel(private val container: AppContainer) : ViewModel() {
     }
 
     fun saveTerm(firstWeekMondayText: String, totalWeeksText: String) {
+        // 空值和写错格式是两回事：以前都报「要写成这样的格式」，
+        // 用户以为界面已经带了默认日期，只会反复点保存（ISSUE-20261029-032）。
+        if (firstWeekMondayText.isBlank()) {
+            _state.update {
+                it.copy(error = "请先填第 1 周周一，例如 2026-09-07（必须是周一）。", notice = null)
+            }
+            return
+        }
         val date = DayCueTime.parseLocalDateOrNull(firstWeekMondayText)
         if (date == null) {
-            _state.update { it.copy(error = "第一周周一要写成 2026-09-01 这样的格式。", notice = null) }
+            _state.update { it.copy(error = "第一周周一要写成 2026-09-07 这样的格式。", notice = null) }
             return
         }
         val weeks = totalWeeksText.trim().toIntOrNull()

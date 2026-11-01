@@ -15,6 +15,10 @@ settings:
     IPHONEOS_DEPLOYMENT_TARGET: "17.0"
     ENABLE_USER_SCRIPT_SANDBOXING: YES
     SWIFT_STRICT_CONCURRENCY: minimal
+    # 构建期注入的服务令牌：**不写进仓库**。
+    # 在 Xcode 的 Build Settings → User-Defined 里加 DAYCUE_DEFAULT_TOKEN，
+    # 或命令行 xcodebuild DAYCUE_DEFAULT_TOKEN=xxx 传入；留空则 App 首次启动没有令牌。
+    DAYCUE_DEFAULT_TOKEN: ""
 
 packages:
   DayCueCore:
@@ -39,6 +43,13 @@ targets:
         CFBundleDisplayName: DayCue
         CFBundleShortVersionString: "0.1.0"
         CFBundleVersion: "1"
+        # 明文 HTTP 例外：当前后端是 http://114.215.171.135:8787。
+        # iOS 的 ATS 默认拦掉所有明文请求，不加这一项 App 会表现成"网络不可用"。
+        # 后端换成 HTTPS 之后应删掉整段。
+        NSAppTransportSecurity:
+          NSAllowsArbitraryLoads: true
+        # 首次启动写入 Keychain 的服务令牌，值由上面的 DAYCUE_DEFAULT_TOKEN 注入。
+        DayCueDefaultToken: "$(DAYCUE_DEFAULT_TOKEN)"
         UILaunchScreen: {}
         UISupportedInterfaceOrientations:
           - UIInterfaceOrientationPortrait

@@ -94,6 +94,24 @@ class SettingsRepository(
     suspend fun setLocationRulesEnabled(enabled: Boolean) =
         dao.put(AppSettingRecord(KEY_LOCATION_RULES, if (enabled) "1" else "0"))
 
+    // ---- 桌面悬浮球 ----
+
+    /**
+     * 桌面悬浮球总开关。
+     *
+     * 默认关闭：它会在所有应用之上绘制窗口，属于「必须由用户显式开启」的能力，
+     * 与位置规则同一个默认值策略——不替用户做主，尤其是这种看得见、容易被误解的能力。
+     *
+     * 这个开关只表达「用户希望它开着」。实际能不能开还要看悬浮窗权限，
+     * 权限被撤销时服务会起不来，设置页必须如实显示而不是显示「已开启」。
+     */
+    suspend fun floatingBallEnabled(): Boolean = dao.get(KEY_FLOATING_BALL) == "1"
+
+    suspend fun setFloatingBallEnabled(enabled: Boolean) =
+        dao.put(AppSettingRecord(KEY_FLOATING_BALL, if (enabled) "1" else "0"))
+
+    fun observeFloatingBall(): Flow<Boolean> = dao.observe(KEY_FLOATING_BALL).map { it == "1" }
+
     // ---- 设备身份 ----
 
     /**
@@ -143,6 +161,9 @@ class SettingsRepository(
         const val KEY_QUIET_START = "budget.quiet_start"
         const val KEY_QUIET_END = "budget.quiet_end"
         const val KEY_LOCATION_RULES = "location.rules_enabled"
+
+        /** 悬浮球开关。写入的是稳定字符串，不随界面文案改名。 */
+        const val KEY_FLOATING_BALL = "overlay.floating_ball"
         const val KEY_DEVICE_ID = "device.id"
         const val KEY_LAST_SYNC_AT = "sync.last_at"
         const val KEY_UI_THEME = "ui.theme_mode"

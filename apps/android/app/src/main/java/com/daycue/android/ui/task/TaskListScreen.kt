@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -214,6 +215,9 @@ private fun NewTaskDialog(
             Column(
                 modifier = Modifier
                     .heightIn(max = 420.dp)
+                    // 弹窗在键盘上方留出空间：不加的话「创建」按钮被输入法盖住，
+                    // 表现得就像按钮坏了（ISSUE-20261029-029）。
+                    .imePadding()
                     .verticalScroll(rememberScrollState()),
             ) {
                 OutlinedTextField(

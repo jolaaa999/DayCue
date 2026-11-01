@@ -131,6 +131,15 @@ type ProviderConfig struct {
 	APIKey  string
 	Model   string
 	Timeout time.Duration
+
+	// MergeSystemPrompt 把 system 指令拼进 user 消息后再发。
+	//
+	// 有些 OpenAI-compatible 中转站会丢弃 system 消息，模型只看到 user 原文，
+	// 于是完全无视输出格式要求：自己发明字段名、自己计算日期。
+	// 真机联调时在 airelay.buzz 上就撞到过——要求它只输出 {"items":[]}，
+	// 它回了一段章鱼有几颗心脏的冷知识。
+	// 默认关闭：正常端点应当保留 system 与 user 的职责分离。
+	MergeSystemPrompt bool
 }
 
 // Configured 表示该供应商是否具备调用条件。
@@ -158,6 +167,8 @@ func Load() Config {
 		APIKey:  os.Getenv("DAYCUE_LLM_API_KEY"),
 		Model:   env("DAYCUE_LLM_MODEL", "gpt-4o-mini"),
 		Timeout: envDuration("DAYCUE_LLM_TIMEOUT", 20*time.Second),
+		// 只有遇到不认 system 角色的中转端点时才需要打开。
+		MergeSystemPrompt: envBool("DAYCUE_LLM_MERGE_SYSTEM_PROMPT", false),
 	}
 	c.ASR = ProviderConfig{
 		BaseURL: os.Getenv("DAYCUE_ASR_BASE_URL"),

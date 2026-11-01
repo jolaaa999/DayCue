@@ -528,6 +528,20 @@ private fun MediaPreviewDialog(
                     )
                     Spacer(Modifier.height(DayCueSpacing.Small))
                     AudioPlaybackBar(path = item.path)
+                } else if (!item.text.isNullOrBlank()) {
+                    // 纯文字记录以前会掉进下面的兜底分支，显示「没有可预览的内容」——
+                    // 明明列表上就有正文，点开却什么都没有（ISSUE-20261029-030）。
+                    Text(
+                        text = "正文",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Spacer(Modifier.height(DayCueSpacing.XSmall))
+                    Text(
+                        text = item.text!!,
+                        style = MaterialTheme.typography.bodyMedium,
+                        modifier = Modifier.heightIn(max = 320.dp).verticalScroll(rememberScrollState()),
+                    )
                 } else {
                     Text(
                         text = "这条记录没有可预览的内容。",

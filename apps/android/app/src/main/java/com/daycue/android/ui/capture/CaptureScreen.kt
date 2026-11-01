@@ -33,6 +33,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -164,6 +165,9 @@ fun CaptureScreen(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(padding)
+                // 键盘弹出时把内容区顶到键盘上方。不加这条，底部的「保存 / 提取待办」
+                // 会落在输入法下面，用户点的是键盘而不是按钮（ISSUE-20261029-029）。
+                .imePadding()
                 .verticalScroll(rememberScrollState())
                 .padding(horizontal = DayCueSpacing.Screen),
         ) {

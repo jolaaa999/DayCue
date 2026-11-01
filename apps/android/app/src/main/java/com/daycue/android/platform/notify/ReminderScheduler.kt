@@ -32,6 +32,15 @@ object NotificationChannels {
     /** 地点提醒单独一个渠道：属于「自主建议」，用户可以单独关掉而不影响自己设定的任务提醒。 */
     const val LOCATION = "location"
 
+    /**
+     * 悬浮球前台服务的常驻通知。
+     *
+     * 单独一个渠道而不是复用 system：用户可能只想安静掉「同步失败」这类系统消息，
+     * 但不该因此把悬浮球的服务通知一起关掉——那会让前台服务在部分 ROM 上被判为异常。
+     * 重要性取 LOW：不响、不弹，只在通知栏占一条。
+     */
+    const val ASSISTANT = "assistant"
+
     fun ensure(context: Context) {
         val appContext = context.applicationContext
         val manager = appContext.getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager ?: return
@@ -66,7 +75,15 @@ object NotificationChannels {
         ).apply {
             description = appContext.getString(R.string.notify_channel_location_desc)
         }
-        manager.createNotificationChannels(listOf(reminder, followUp, system, location))
+        val assistant = NotificationChannel(
+            ASSISTANT,
+            appContext.getString(R.string.notify_channel_assistant_name),
+            NotificationManager.IMPORTANCE_LOW,
+        ).apply {
+            description = appContext.getString(R.string.notify_channel_assistant_desc)
+            setShowBadge(false)
+        }
+        manager.createNotificationChannels(listOf(reminder, followUp, system, location, assistant))
     }
 }
 

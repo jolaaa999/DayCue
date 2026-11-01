@@ -210,7 +210,12 @@ fun ScheduleWeekScreen(
 
         if (showTermDialog) {
             TermDialog(
-                initialFirstMonday = state.term?.let { DayCueTime.localDateString(it.firstWeekMonday) } ?: "",
+                // 没设置过学期时不能给空串：用户看到浮动标签里有个日期，以为已经有默认值，
+                // 直接点保存只会得到一句「格式不对」（ISSUE-20261029-032）。
+                // 默认填当前正在看的这一周的周一——它天然是周一，也是大多数人的实际起点。
+                initialFirstMonday = state.term?.let { DayCueTime.localDateString(it.firstWeekMonday) }
+                    ?: state.monday?.let { DayCueTime.localDateString(it) }
+                    ?: "",
                 initialWeeks = state.term?.totalWeeks?.toString() ?: "30",
                 onDismiss = { showTermDialog = false },
                 onConfirm = { firstMonday, weeks ->
@@ -307,7 +312,8 @@ private fun TermDialog(
                     onValueChange = { firstMonday = it },
                     modifier = Modifier.fillMaxWidth(),
                     singleLine = true,
-                    label = { Text("第 1 周周一（2026-09-01）") },
+                    // 示例必须自己就是周一：写个周二当示例，等于教用户填错（见 ISSUE-20261029-033）
+                    label = { Text("第 1 周周一（2026-09-07）") },
                 )
                 OutlinedTextField(
                     value = weeks,
@@ -317,7 +323,8 @@ private fun TermDialog(
                     label = { Text("学期总周数（1–60）") },
                 )
                 Text(
-                    text = "课表展开、单双周判断与 ICS 导入的周次换算都以这里为基准。",
+                    text = "课表展开、单双周判断与 ICS 导入的周次换算都以这里为基准；" +
+                        "请填周一日期，第 1 周就从这天开始。",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.padding(top = 8.dp),

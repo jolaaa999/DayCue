@@ -654,3 +654,48 @@ func TestRootHandlerMountsAccountRoutes(t *testing.T) {
 		t.Errorf("AI 端点应仍然可用（无供应商 → 503），实得 %d: %s", rec.Code, rec.Body.String())
 	}
 }
+
+// TestExtractionsAcceptsUserTokenWhenServiceTokenConfigured 钉住局域网部署最关键的鉴权语义：
+// 配了服务令牌之后，AI 端点必须同时接受用户令牌。
+//
+// 两个客户端对每个请求只带一个 Authorization 头，且内容一定是登录令牌；
+// 而部署到非环回地址时 config 强制要求 DAYCUE_AUTH_TOKEN。只认服务令牌的话，
+// 「后端配好了、手机上一用就 401」就成了默认结果，而且报错是「缺少或无效的访问令牌」，
+// 完全指不到真正的冲突点。
+func TestExtractionsAcceptsUserTokenWhenServiceTokenConfigured(t *testing.T) {
+	f := newAccountFixture(t)
+	cfg := testConfig()
+	cfg.AuthToken = "service-secret"
+	root, err := NewRootHandler(New(cfg), f.deps)
+	if err != nil {
+		t.Fatalf("合并根处理器失败: %v", err)
+	}
+	userToken := f.seedUser(t, "u_ai", "ai@example.com")
+
+	// 探活必须不鉴权：要求带密钥的探活没法回答「进程活着但令牌配错了」，
+	// 只会让监控与负载均衡把健康的实例判死。
+	if rec := requestWith(t, root, http.MethodGet, "/v1/health", "", "", ""); rec.Code != http.StatusOK {
+		t.Errorf("健康检查不应要求令牌，实得 %d: %s", rec.Code, rec.Body.String())
+	}
+
+	// 无供应商时 AI 端点返回 503，说明请求已经越过鉴权；401 才是被挡下来的信号。
+	rec := requestWith(t, root, http.MethodPost, "/v1/extractions", userToken, validBody(), "application/json")
+	if rec.Code == http.StatusUnauthorized {
+		t.Fatalf("用户令牌不应被 AI 端点拒绝，实得 %d: %s", rec.Code, rec.Body.String())
+	}
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Errorf("无供应商时应为 503，实得 %d: %s", rec.Code, rec.Body.String())
+	}
+
+	// 服务令牌仍然可用：运维脚本与既有调用方式不能被这次放宽弄坏。
+	rec = requestWith(t, root, http.MethodPost, "/v1/extractions", "service-secret", validBody(), "application/json")
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Errorf("服务令牌应仍然有效，实得 %d: %s", rec.Code, rec.Body.String())
+	}
+
+	// 既不是服务令牌、也不是合法用户令牌，必须拒绝——放宽不能变成放行。
+	rec = requestWith(t, root, http.MethodPost, "/v1/extractions", "not-a-real-token", validBody(), "application/json")
+	if rec.Code != http.StatusUnauthorized {
+		t.Errorf("无效令牌必须 401，实得 %d: %s", rec.Code, rec.Body.String())
+	}
+}

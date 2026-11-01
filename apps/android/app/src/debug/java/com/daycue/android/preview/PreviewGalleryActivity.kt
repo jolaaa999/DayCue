@@ -133,6 +133,7 @@ fun PreviewGalleryScene(scene: String) {
             onOpenAppearance = {},
             onOpenData = {},
             onOpenAdvanced = {},
+            onOpenAssistant = {},
         )
 
         "settings_home_local" -> SettingsHomeContent(
@@ -145,6 +146,7 @@ fun PreviewGalleryScene(scene: String) {
             onOpenAppearance = {},
             onOpenData = {},
             onOpenAdvanced = {},
+            onOpenAssistant = {},
         )
 
         else -> TodayContent(

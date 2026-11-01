@@ -30,8 +30,11 @@ class AndroidDeviceCapabilitySnapshot(
         map["precise_location"] = PermissionCenter.hasFineLocation(appContext)
         // Android 端不读写系统日历（见 README 的已知限制），所以这一项是明确的 false，不是未知。
         map["calendar_write"] = false
-        // 语音转写始终依赖后端，客户端本地没有这个能力。
-        map["speech_transcription"] = false
+        // 本机有系统听写服务时为 true：此时录音入口走端侧识别，不需要后端 ASR。
+        // 没有听写服务的设备仍会回退到 /v1/transcriptions，所以这里如实上报而不是写死。
+        map["speech_transcription"] = runCatching {
+            android.speech.SpeechRecognizer.isRecognitionAvailable(appContext)
+        }.getOrDefault(false)
         return map
     }
 

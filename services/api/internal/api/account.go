@@ -2,7 +2,9 @@
 //
 // 设计取舍：
 //   - 这些端点与 api.go 的 AI 端点分开组装：前者按"登录令牌 → userID"隔离数据，
-//     后者是服务级静态令牌 + 无状态转换；混在一个 Server 上会让鉴权语义变得含糊。
+//     后者默认是服务级静态令牌 + 无状态转换；混在一个 Server 上会让鉴权语义变得含糊。
+//     唯一的交叉点是 AI 端点也要认用户令牌（见 NewRootHandler 注入 userTokenOK 的原因）：
+//     客户端只有一个 Authorization 头，不认用户令牌就会在非环回部署下整体 401。
 //   - 依赖全部是接口，测试里注入 store.Memory / media.MemoryCatalog / syncsvc.Service
 //     就能真跑，不需要数据库，也不需要网络。
 //   - userID **只从令牌取**。请求结构体里根本没有 user_id 字段，而 httpx.DecodeJSON
@@ -152,6 +154,23 @@ func NewRootHandler(s *Server, deps AccountDeps) (http.Handler, error) {
 		return nil, err
 	}
 	accountRoutes := accounts.Routes()
+
+	// 让 AI 端点也认用户令牌。
+	//
+	// 不注入的话，非环回部署（config 强制要求 DAYCUE_AUTH_TOKEN）下手机端调
+	// /v1/extractions 与 /v1/transcriptions 会一直是 401：客户端带的是登录令牌，
+	// 而这两个端点只比服务令牌。校验逻辑与 requireUser 一致——令牌是自包含的、
+	// 无法单独撤销，所以必须每次确认账号仍然存在，否则删号后旧令牌还能继续调 AI。
+	s.userTokenOK = func(ctx context.Context, token string) bool {
+		userID, err := deps.Issuer.Verify(token)
+		if err != nil {
+			return false
+		}
+		if _, err := deps.Users.UserByID(ctx, userID); err != nil {
+			return false
+		}
+		return true
+	}
 
 	root := http.NewServeMux()
 	for _, pattern := range []string{

@@ -19,6 +19,20 @@ android {
         versionCode = 1
         versionName = "0.1.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+
+        // 服务器联调用的默认后端地址与令牌：装完即连，不需要在手机上手工填写。
+        // 地址允许用环境变量覆盖（例如换成局域网地址），令牌只从构建期环境变量注入，
+        // 刻意不写进源码——写进源码等于把密钥提交进 git。
+        buildConfigField(
+            "String",
+            "DEFAULT_BACKEND_URL",
+            "\"" + (System.getenv("DAYCUE_BACKEND_URL") ?: "http://114.215.171.135:8787") + "\"",
+        )
+        buildConfigField(
+            "String",
+            "DEFAULT_BEARER_TOKEN",
+            "\"" + (System.getenv("DAYCUE_DEFAULT_TOKEN") ?: "") + "\"",
+        )
     }
 
     buildTypes {
@@ -39,6 +53,8 @@ android {
 
     buildFeatures {
         compose = true
+        // 上面的 buildConfigField 需要显式打开 BuildConfig 生成。
+        buildConfig = true
     }
 
     packaging {

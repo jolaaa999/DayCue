@@ -163,7 +163,12 @@ public final class DayCueStore {
         public static let preferredTimezone = "app.timezone"
     }
 
-    public static let defaultAPIBaseURL = "http://127.0.0.1:8787"
+    /// 默认后端地址。
+    ///
+    /// 与 Android 的 BuildConfig.DEFAULT_BACKEND_URL 保持一致，指向已部署的服务器。
+    /// 回环地址在这里是有害的默认值：真机上 127.0.0.1 指手机自己，
+    /// 用户只会看到"网络不可用"，很难联想到是地址问题（Android 端已经踩过一次）。
+    public static let defaultAPIBaseURL = "http://114.215.171.135:8787"
 }
 
 /// 任务排序的唯一定义处。

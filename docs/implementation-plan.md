@@ -742,6 +742,79 @@ UPDATE / 解码下标 / 列清单）+ `PlaceEditorView` 的可选任务选择器
 只有静态自洽）；Android 依旧**从未在真机或模拟器上运行**，
 本轮新增的回前台重报同样**没有在设备上验证过**——`registerActivityLifecycleCallbacks`
 的实际触发时机、以及权限变更后系统是否真的会触发 `onActivityResumed`，都需要设备确认。
+### 10.8 真机联调前置条件（本轮补掉的 4 个阻塞项）
+
+准备用 vivo 真机联调时逐项核对，发现按当时的代码**一步都走不通**。
+四个问题都不是「参数没填对」，而是源码层面的缺口。
+
+**① 明文 HTTP 被系统拦掉。** 清单里没有 `usesCleartextTraffic`，也没有网络安全配置；
+传输层是 OkHttp（`network/HttpTransport.kt`），`targetSdk = 35` 从 API 28 起默认禁止明文。
+填 `http://192.168.x.x:8787` 会在请求发出之前就抛
+`CLEARTEXT communication ... not permitted by network security policy` ——
+这句话看起来像网络不通，实际是本地策略在拦，很容易查错方向。
+补法：新增 `apps/android/app/src/debug/AndroidManifest.xml`，只声明
+`android:usesCleartextTraffic="true"`。**刻意不写进 main**，否则哪天有人为了联调
+把放行带进正式包。已用 `aapt2 dump xmltree` 在产物 APK 里确认该属性真的生效。
+
+**② 默认后端根本没有账号端点。** `scripts/run-api.ps1` 用的是 `go run ./cmd/daycued`，
+不带 `-tags postgres`；此时 `cloudsync.go` 的桩返回 nil handler，`/v1/auth/*` 与
+`/v1/sync/*` **完全不存在**（直接 404）。所以「手机拿不到令牌」不是配置问题，
+是跑错了构建。补法：新增 `scripts/run-api-lan.ps1`，带 `-tags postgres` 启动。
+
+**③ AI 端点只认服务令牌，手机必然 401。** 本轮最值得记的一条：
+`NewRootHandler` 把账号路由直接挂到 `accountRoutes`（`requireUser`，用户令牌），
+而 `/v1/extractions` 与 `/v1/transcriptions` 留在 `s.Handler()` 里走 `httpx.Auth`（服务令牌）。
+**两者读的是同一个 `Authorization: Bearer` 头**，而客户端对每个请求只发一个头、内容是登录令牌。
+于是只要部署到非环回地址（config 强制要求 `DAYCUE_AUTH_TOKEN`），App 的整理与转写会
+**全部 401**，而报错仍是「缺少或无效的访问令牌」——完全指不到真正的冲突点。
+补法：`Server` 新增 `userTokenOK`，由 `NewRootHandler` 注入；`authMiddleware` 改为
+「服务令牌 **或** 合法用户令牌」。校验逻辑与 `requireUser` 一致（令牌自包含、无法单独撤销，
+所以每次都确认账号仍然存在）。未配置服务令牌时保持原有语义（不鉴权），既有用例不受影响。
+
+**④ 探活接口也被要求带密钥。** 配了服务令牌后 `/v1/health` 返回 401。
+要求带密钥的探活没法回答「进程活着但令牌配错了」，只会让监控与负载均衡把健康实例判死；
+`scripts/verify-api.ps1` 也不带认证头，会整片挂掉。补法：`/v1/health` 豁免鉴权。
+这条在只监听环回时完全看不出来（那时压根不鉴权），**部署到局域网才暴露**。
+
+**真实执行结果**（本机，真库 + 真进程，不是模拟）：
+
+```powershell
+# 1. 起服务：0.0.0.0:8787 + -tags postgres + 持久化令牌
+powershell -File scripts/run-api-lan.ps1
+
+# 2. 签发用户令牌（Android 没有登录界面，只能先在电脑上换一个）
+powershell -File scripts/issue-token.ps1 -Register
+# → user_id=usr_b99f0d9f6989b3fb1b4ff9c42b69c6eb
+
+# 3. 用真实 HTTP 打六种组合
+GET  /v1/health       无令牌   → 200
+GET  /v1/devices      用户令牌 → 200
+POST /v1/extractions  用户令牌 → 503   ← 修复前这里是 401
+POST /v1/extractions  服务令牌 → 503
+POST /v1/extractions  伪造令牌 → 401
+GET  /v1/devices      无令牌   → 401
+```
+
+503 而不是 200 是**预期**的：本机没配 `DAYCUE_LLM_*`，两个端点如实返回「无供应商」。
+关键是请求已经越过鉴权——401 才是被挡下来的信号。
+
+新增回归用例 `TestExtractionsAcceptsUserTokenWhenServiceTokenConfigured`，
+把四种组合与探活豁免一起钉住。
+
+> 记一条排查教训：上一轮的 `daycued-lan.exe` 没退干净、占着 8787，
+> 新进程绑不上端口就直接退出了，于是「改完代码却没生效」——看起来像修复无效，
+> 实际是旧进程还在服务。第二次先 `Stop-Process` 再起才通过。
+
+**真机联调的两条路径**（脚本启动时会把这两条打印出来）：
+- **USB `adb reverse`**：`adb reverse tcp:8787 tcp:8787` 后手机填 `http://127.0.0.1:8787`。
+  不用改防火墙、不用同一网段，是目前最省事的方式；同时能拿 logcat。
+- **局域网直连**：填电脑的局域网 IP，需要一次防火墙放行：
+  `New-NetFirewallRule -DisplayName 'DayCue dev 8787' -Direction Inbound -LocalPort 8787 -Protocol TCP -Action Allow`。
+
+**仍未验证**：以上全部是**电脑侧**的验证。手机上的实际表现（安装、启动、迁移、
+通知、围栏、权限变更）**一条都还没跑过**——本机没有模拟器，
+也没有可用的设备连接。
+
 ## 十一、调用方缺口与本轮补齐情况
 
 第十一节此前列出的缺口，本轮**逐条处理**如下。判定标准不变：
@@ -758,18 +831,19 @@ UPDATE / 解码下标 / 列清单）+ `PlaceEditorView` 的可选任务选择器
 | iOS 无 `noteLocalChange` 调用点 | 8 个本地写点接上（`TaskWriteService` 用注入回调，避免仓储互相持有） | ✅ 已接通 |
 | Android `OutboxExecutionRegistry` 未注册执行者 | `OutboxExecutors.install` 挂到 Application；后台作业改委托 `OutboxProcessor` | ✅ 已接通 |
 | Android outbox 无生产入队方 | 带提醒的任务保存入队 `create_reminder`；完成/取消/软删除/清提醒入队 `delete_reminder` | ✅ 已接通 |
-| Android `GeoRuleEvaluator` 只被自己引用 | 仍缺系统位置事件源 | ⚠️ **部分实现** |
+| Android `GeoRuleEvaluator` 只被自己引用 | 新增 `AndroidLocationEventSource`（系统 `addProximityAlert`）+ `GeoProximityReceiver` + `GeoDwellRecheckReceiver`，`AppContainer` 装配 `GeoProactiveCoordinator` | ✅ 已接通（触发时机未在设备上验证） |
 | Android `syncSnapshotWriter` 未装配 | 语义不成立（`SyncField` 不含外部 id，`task` 表也无该列），**如实保持为空并注明原因** | ⚠️ **已知缺口** |
 
 ### 11.1 仍未闭环的缺口（如实列出）
 
 | 模块 | 现状 | 后果 |
 |---|---|---|
-| Android 位置事件源 | `GeoRuleEvaluator` 有纯逻辑与测试，但没有 `LocationManager` 事件驱动的调用方 | 地点规则不会被评估，也不会触发提醒 |
+| Android 围栏的后台触发 | 用系统 `addProximityAlert`（自 API 29 起标记废弃），且**有意不申请** `ACCESS_BACKGROUND_LOCATION` | 切后台后围栏大概率不触发——这是设计取舍，需在真机上记录实际表现而不是当回归 |
 | `task.external_id` 未持久化 | 删除载荷里的 external_id 由 taskId 确定性推导 | 接入真实外部提供方前必须先加这一列，否则删不到对象 |
 | Android 三方对账快照 | `syncSnapshotWriter` 保持为空 | 接入真实外部提供方前，三方比较缺"上次快照"基准 |
 | iOS `ReconciliationCoordinator` 的入队出口 | 用进程级静态出口，因为该协调器由视图 `@StateObject` 创建、容器拿不到实例 | 功能可用，但不符合"逐实例注入"的偏好 |
 | iOS 手动新建笔记 | `NoteListView` 有意不放新建入口，而 `NoteOriginKind` 有 `manual` | 设计取舍，非缺陷；但需明示 |
+| Android 无登录/注册界面 | 设置页只能粘贴令牌，令牌得在电脑上用 `scripts/issue-token.ps1` 换 | 普通用户无法自行登录；真机联调多一步手工 |
 | `proactive-candidate` / `proactive-delivery` 契约 | 有 schema，**没有对应 HTTP 端点** | 字段按 Go 类型推导，未与真实响应比对 |
 
 ### 11.2 判定标准（不变）

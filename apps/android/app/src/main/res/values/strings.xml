@@ -14,6 +14,13 @@
     <string name="notify_channel_location_name">地点提醒</string>
     <string name="notify_channel_location_desc">进入或离开你设定过的地点时的提醒</string>
 
+    <!-- 悬浮球：前台服务的常驻通知必须如实说明「为什么有一个关不掉的图标」 -->
+    <string name="notify_channel_assistant_name">悬浮球</string>
+    <string name="notify_channel_assistant_desc">桌面悬浮球运行时的常驻通知</string>
+    <string name="overlay_notify_title">悬浮球已开启</string>
+    <string name="overlay_notify_text">点按打开今天页；悬浮球上的「记」可展开扇区菜单</string>
+    <string name="overlay_notify_stop">关闭悬浮球</string>
+
     <string name="notify_exact_alarm_degraded">系统未授予精确闹钟权限，提醒可能延迟数分钟；可在系统设置里允许「闹钟和提醒」。</string>
     <string name="notify_location_unavailable">本机没有可用的定位能力，地点规则已禁用。</string>
 </resources>

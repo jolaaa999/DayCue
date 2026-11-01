@@ -3,6 +3,7 @@ package com.daycue.android.ui.settings
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -46,6 +47,8 @@ fun SettingsTermScreen(
         Column(
             modifier = Modifier
                 .padding(padding)
+                // 同 ISSUE-20261029-029：键盘弹出时不要让底部内容被遮住
+                .imePadding()
                 .verticalScroll(rememberScrollState())
                 .padding(horizontal = DayCueSpacing.Screen),
         ) {
@@ -93,7 +96,18 @@ fun SettingsTermScreen(
         EditPairDialog(
             title = "学期基准",
             firstLabel = "第一周的周一（2026-09-07）",
-            firstInitial = state.termFirstMonday,
+            // 没设置过学期时预填「本周周一」：空着加一句「格式不对」等于让用户自己猜（ISSUE-20261029-032）
+            firstInitial = state.termFirstMonday.ifBlank {
+                runCatching {
+                    val today = com.daycue.android.core.DayCueTime.localDateOf(
+                        container.timeSource.now(),
+                        java.time.ZoneId.systemDefault(),
+                    )
+                    com.daycue.android.core.DayCueTime.localDateString(
+                        com.daycue.android.core.DayCueTime.weekStart(today),
+                    )
+                }.getOrDefault("")
+            },
             secondLabel = "学期总周数（1–60）",
             secondInitial = state.termWeeks,
             firstKeyboardType = KeyboardType.Text,

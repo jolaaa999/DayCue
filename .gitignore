@@ -1,4 +1,7 @@
 # 凭据：真实 API Key 绝不能进仓库，样例见 services/api/.env.example
+
+# 联调脚本生成的本地服务令牌（scripts/run-api-lan.ps1 写入）
+scripts/.lan-secrets.json
 .env
 .env.local
 *.local.env
@@ -28,3 +31,7 @@ undefined/
 # 系统
 .DS_Store
 Thumbs.db
+
+# Agent 与构建临时目录（.dsh-tmp 内是 1.8 GB 的 Gradle 缓存，绝不能进仓库）
+.dsh-tmp/
+.kotlin/

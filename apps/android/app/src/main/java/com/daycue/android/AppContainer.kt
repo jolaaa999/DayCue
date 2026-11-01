@@ -25,6 +25,7 @@ import com.daycue.android.platform.capability.AndroidDeviceCapabilitySnapshot
 import com.daycue.android.platform.capability.CapabilityReport
 import com.daycue.android.platform.capability.CapabilityProbe
 import com.daycue.android.platform.media.AudioRecorder
+import com.daycue.android.platform.speech.SystemSpeechInput
 import com.daycue.android.domain.location.LocationRuleSwitch
 import com.daycue.android.platform.location.AndroidLocationEventSource
 import com.daycue.android.platform.location.LocationCapabilityProbe
@@ -53,6 +54,9 @@ import kotlinx.coroutines.runBlocking
  * 所以它们是建好即用的对象，真正的 IO 都发生在 suspend 方法里。
  */
 class AppContainer(context: Context) {
+
+    /** 回环地址判定：这类地址在手机上指向设备自己，属于开发残留，启动时会被覆盖成构建时注入的地址。 */
+    private val LOOPBACK_URL_PATTERN = Regex("^https?://(127\\.0\\.0\\.1|localhost|0\\.0\\.0\\.0|\\[::1\\])(?::\\d+)?(/|$)")
 
     private val appContext: Context = context.applicationContext
 
@@ -152,6 +156,9 @@ class AppContainer(context: Context) {
     /** 图片文字识别：纯本地能力，没有网络也能用，所以挂在容器上而不是某个页面的 ViewModel 里。 */
     val imageTextRecognizer = ImageTextRecognizer(appContext)
     val audioRecorder = AudioRecorder(appContext)
+
+    // 系统听写：录音入口优先走它，不可用时 CaptureViewModel 会回退到"录音 + 后端转写"。
+    val systemSpeechInput = SystemSpeechInput(appContext)
     val tokenStore = TokenStore(appContext)
 
     // ---- 地点规则链路 ----
@@ -239,6 +246,23 @@ class AppContainer(context: Context) {
         // 放在异步收集里会有一个真实竞态：启动时的上报可能拿到 null，
         // 结果服务端为这台设备新生成一个 id，而本地之后一直用另一个——推送与能力上报就此分叉。
         cachedDeviceId = runBlocking(Dispatchers.IO) {
+            // 预置后端地址与令牌：装完即可直连服务器，不必在设置页手填。
+            // 只在「用户从未配置过」时写一次——之后用户在设置页改过的值不会被启动逻辑覆盖。
+            // 令牌仍然走 TokenStore（Keystore 加密），这里只是替用户省掉一次粘贴。
+            // 只要存的是回环地址就当作"开发残留"覆盖掉：127.0.0.1/localhost 在手机上指手机自己，
+            // 上一次联调留下的这种地址会让所有请求"连不上"，而界面只会显示"网络不可用"，
+            // 极难联想到是地址问题（本机实测踩过：库里存着 127.0.0.1:8787）。
+            val storedUrl = settingsRepository.backendBaseUrl()?.trim()
+            val isDevLeftover = storedUrl != null && LOOPBACK_URL_PATTERN.containsMatchIn(storedUrl)
+            if ((storedUrl.isNullOrBlank() || isDevLeftover) && BuildConfig.DEFAULT_BACKEND_URL.isNotBlank()) {
+                settingsRepository.setBackendBaseUrl(BuildConfig.DEFAULT_BACKEND_URL)
+                cachedBaseUrl = BuildConfig.DEFAULT_BACKEND_URL
+            }
+            // 令牌每次启动与构建值对齐：这份自用构建固定指向一台服务器，
+            // 令牌必须和服务器上的一致，留着旧令牌只会换来一片 401。
+            if (BuildConfig.DEFAULT_BEARER_TOKEN.isNotBlank()) {
+                tokenStore.save(BuildConfig.DEFAULT_BEARER_TOKEN)
+            }
             val existing = settingsRepository.deviceId()
             if (existing != null) {
                 existing

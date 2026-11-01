@@ -21,19 +21,28 @@ type OpenAI struct {
 	baseURL string
 	apiKey  string
 	model   string
-	client  *http.Client
+
+	// mergeSystemPrompt 见 NewOpenAI 的说明：专为不认 system 角色的端点准备。
+	mergeSystemPrompt bool
+
+	client *http.Client
 }
 
-// NewOpenAI 构造适配器；响应格式固定要求 JSON object，便于结构化解析。
-func NewOpenAI(baseURL, apiKey, model string, timeout time.Duration) *OpenAI {
+// NewOpenAI 构造 OpenAI-compatible 客户端；响应格式固定要求 JSON object，便于结构化解析。
+//
+// mergeSystemPrompt 用于绕过「不认 system 角色」的中转端点：这类网关会把
+// system 消息丢掉，模型只看到 user 原文，于是无视输出格式要求、自己发明字段、
+// 自己算日期。打开后把指令直接拼在 user 消息前面——实测能让这类端点恢复可用。
+func NewOpenAI(baseURL, apiKey, model string, timeout time.Duration, mergeSystemPrompt bool) *OpenAI {
 	if timeout <= 0 {
 		timeout = 20 * time.Second
 	}
 	return &OpenAI{
-		baseURL: strings.TrimRight(baseURL, "/"),
-		apiKey:  apiKey,
-		model:   model,
-		client:  &http.Client{Timeout: timeout},
+		baseURL:           strings.TrimRight(baseURL, "/"),
+		apiKey:            apiKey,
+		model:             model,
+		mergeSystemPrompt: mergeSystemPrompt,
+		client:            &http.Client{Timeout: timeout},
 	}
 }
 
@@ -69,12 +78,19 @@ type chatResponse struct {
 
 // Complete 调用上游；错误信息里绝不带上游响应体，避免把用户原文带进日志。
 func (o *OpenAI) Complete(ctx context.Context, system, user string) (Result, error) {
+	// 默认保留 system/user 的职责分离；只有对不认 system 角色的端点才合并。
+	messages := []chatMessage{
+		{Role: "system", Content: system},
+		{Role: "user", Content: user},
+	}
+	if o.mergeSystemPrompt {
+		// 合并时保留空行分隔，让指令块和待处理原文在视觉上仍分得开。
+		messages = []chatMessage{{Role: "user", Content: system + "\n\n" + user}}
+	}
+
 	payload := chatRequest{
-		Model: o.model,
-		Messages: []chatMessage{
-			{Role: "system", Content: system},
-			{Role: "user", Content: user},
-		},
+		Model:          o.model,
+		Messages:       messages,
 		Temperature:    0,
 		ResponseFormat: &responseFormat{Type: "json_object"},
 	}
