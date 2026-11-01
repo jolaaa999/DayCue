@@ -54,7 +54,7 @@
 | ISSUE-20261101-002 | 服务端 ASR 供应商 | P2 | 已确认（未修复） | 2026-11-01 | 2026-11-01 | `curl -F file=@silence.wav $BASE/audio/transcriptions` |
 | ISSUE-20261101-003 | 服务端 LLM 供应商 | P1 | 已验证解决 | 2026-11-01 | 2026-11-01 | 真实提取请求 → 200 + 时刻正确 |
 | ISSUE-20261101-004 | iOS 构建/联网 | P1 | 已修改（未验证编译） | 2026-11-01 | 2026-11-01 | 待 Mac 上 `xcodegen generate` + 真机验证 |
-| ISSUE-20261101-006 | iOS 编译 | P1 | 已修复（待复编验证） | 2026-11-01 | 2026-11-01 | Mac 上 `xcodebuild` 复编 |
+| ISSUE-20261101-006 | iOS 编译 | P1 | 已验证解决（模拟器编译通过 @b86a676） | 2026-11-01 | 2026-11-01 | Mac 上 `xcodebuild` 复编 |
 | ISSUE-20261101-005 | Android 语音（方案 B） | P2 | 待验证 | 2026-11-01 | 2026-11-01 | 真机录一段话看是否走系统听写 |
 
 ## 问题详情
@@ -893,7 +893,12 @@
 - **验证命令、环境、结果与时间**：未执行（当前环境无 Swift 工具链）；已用静态扫描核对其余 `.text()` 绑定与 async/throws 调用点，未发现同类遗漏（其余命中均为同名函数误报）。
 - **关联提交 / PR / 其他问题 ID**：ISSUE-20261101-004。
 - **2026-11-01 复编补充（第 5 处）**：拉取 8fef815 后再次编译，报 `DayCueStore+Geo.swift (line 682) 参数顺序不正确，linkedTaskID 必须放在 expiresAtUTC 前面`。原因：`GeoRuleRecord.init` 的形参顺序是 `... enabled, linkedTaskID, expiresAtUTC, createdAt, updatedAt, deletedAt`（属性声明顺序），`makeGeoRule` 调用时按数据库列序写成 `expiresAtUTC(11) → ... → linkedTaskID(15)`。Swift 的命名参数只放宽可读性，**不改变顺序约束**。已把 `linkedTaskID: statement.string(15)` 移到 `expiresAtUTC` 之前，其余实参保持原列号不变。同时用脚本扫描全工程 291 个显式 init 的调用点，36 处命中经抽查均为误报（结构体无显式 init 时走 memberwise init，顺序由属性声明决定）。
-- **残余风险、复发记录**：iOS 代码从未完整编译过，修完这 4 处后仍可能出现新的编译错误（如 `@MainActor` 隔离、Sendable 约束），需按报错继续迭代。
+- **2026-11-01 15:12 收口（第 6–9 处，朋友在 Mac 上完成）**：`b86a676 Fix remaining iOS simulator build errors`，**iOS 模拟器目标编译通过**。四处改动经复核均属正确处理，无「注释掉/吞异常/降级断言」的规避写法：
+  1. `AppSettings.swift` 补 `import DayCueCore`（引用了 `DayCueStore.SettingKey`，缺模块导入）；
+  2. `DebugWriteFaultInjection.swift` 同上补 `import DayCueCore`；
+  3. `AudioRecorderService.start()` 把 `guard hasPermission else { ... }` 改为 `if !hasPermission { ... }`——原写法在「已授权」分支执行到 else 块末尾会**穿透**，而 `guard` 的 else 必须退出作用域，编译不通过；改 `if` 语义等价且正确；
+  4. `CourseEditorView` 把 `EditableRule` 的自定义 `init(rule:timeZone:)` 移到 `private extension`——显式 init 定义在结构体体内会**抑制自动生成的 memberwise init**，而该结构体另有一处以 memberwise 形式构造，移到扩展后两者共存。
+- **残余风险、复发记录**：本次仅验证 **iOS 模拟器编译**。真机安装、ATS 例外是否生效、令牌注入是否写入 Keychain、以及端到端提取链路均**未验证**；当前环境无 macOS，无法复现构建。
 
 ## 回归测试索引
 

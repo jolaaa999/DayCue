@@ -320,3 +320,9 @@
   - **未编译**：当前环境没有 macOS/Swift 工具链，Swift 改动未经编译器检查。
 - **Android 语音**：新增 `platform/speech/SystemSpeechInput.kt`，录音入口改为"系统听写优先、不可用回退后端转写"；`speech_transcription` 能力改为按实际可用性上报。APK `fc029bfc…c7e3` 已安装到真机（11:43:07），**识别效果尚未验证**。
 - **安装教训**：vivo 的包安装器覆盖安装时先卸载旧包，中途被拒会变成"旧包已删、新包未装"，本地数据一并丢失（11:38 日志可见 `Package removed`）。改用 `adb install --no-streaming` 后，失败时数据目录可保留；后续安装前应先备份 `/data/data/com.daycue.android/databases`。
+
+### 2026-11-01 15:40｜iOS 模拟器编译通过（b86a676）
+- 朋友在其 Mac 上修复剩余 4 处错误并推送 `b86a676`，同时打了标签 `ios-simulator-b86a676`；本地已 `pull --ff-only` 同步，工作区干净。
+- 四处改动：AppSettings / DebugWriteFaultInjection 补 `import DayCueCore`；`AudioRecorderService.start()` 的 `guard` 改 `if`（原写法 else 分支会穿透）；`EditableRule.init(rule:timeZone:)` 移入扩展以保留 memberwise init。
+- 复核确认此前部署配置未被覆盖：ATS 例外、`DAYCUE_DEFAULT_TOKEN` 注入、默认后端地址 `http://114.215.171.135:8787`、回环覆盖与令牌预置逻辑、Geo 参数顺序修复均仍在。
+- 仍未验证：真机安装、ATS 实际放行、令牌写入 Keychain、端到端提取链路。
