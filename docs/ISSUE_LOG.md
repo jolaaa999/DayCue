@@ -54,6 +54,7 @@
 | ISSUE-20261101-002 | 服务端 ASR 供应商 | P2 | 已确认（未修复） | 2026-11-01 | 2026-11-01 | `curl -F file=@silence.wav $BASE/audio/transcriptions` |
 | ISSUE-20261101-003 | 服务端 LLM 供应商 | P1 | 已验证解决 | 2026-11-01 | 2026-11-01 | 真实提取请求 → 200 + 时刻正确 |
 | ISSUE-20261101-004 | iOS 构建/联网 | P1 | 已修改（未验证编译） | 2026-11-01 | 2026-11-01 | 待 Mac 上 `xcodegen generate` + 真机验证 |
+| ISSUE-20261101-007 | iOS 产物 | P2 | 已确认（未修） | 2026-11-01 | 2026-11-01 | 重装注入令牌后提取一次 |
 | ISSUE-20261101-006 | iOS 编译 | P1 | 已验证解决（模拟器编译通过 @b86a676） | 2026-11-01 | 2026-11-01 | Mac 上 `xcodebuild` 复编 |
 | ISSUE-20261101-005 | Android 语音（方案 B） | P2 | 待验证 | 2026-11-01 | 2026-11-01 | 真机录一段话看是否走系统听写 |
 
@@ -900,6 +901,22 @@
   4. `CourseEditorView` 把 `EditableRule` 的自定义 `init(rule:timeZone:)` 移到 `private extension`——显式 init 定义在结构体体内会**抑制自动生成的 memberwise init**，而该结构体另有一处以 memberwise 形式构造，移到扩展后两者共存。
 - **残余风险、复发记录**：本次仅验证 **iOS 模拟器编译**。真机安装、ATS 例外是否生效、令牌注入是否写入 Keychain、以及端到端提取链路均**未验证**；当前环境无 macOS，无法复现构建。
 
+### ISSUE-20261101-007｜模拟器产物未注入令牌，装上后提取必然 401
+- **首次发现 / 最近更新**：2026-11-01 / 2026-11-01
+- **模块与环境**：GitHub Release `ios-simulator-b86a676` 的 `DayCue-iOS-Simulator-b86a676.zip`；Xcode 27.2，`-sdk iphonesimulator`，`CODE_SIGNING_ALLOWED=NO`
+- **严重程度**：P2（产物可用性，不影响源码）
+- **状态**：已确认（未修）
+- **现象、预期、实际**：预期产物带构建期令牌、装上即可提取；实际包内**不含令牌**（构建命令未传 `DAYCUE_DEFAULT_TOKEN`），首次启动 Keychain 为空，`POST /v1/extractions` 会返回 401。
+- **复现步骤与条件**：下载该 zip → 展开 `DayCue.app` → 在字节中检索 44 字符令牌串；或在模拟器安装后点「提取待办」。
+- **原始证据（已脱敏）**：`Info.plist` 含 `NSAllowsArbitraryLoads` 与 `DayCueDefaultToken` 键；`DayCue.debug.dylib` 含 `114.215.171.135`（默认地址已编入）；zip 与 dylib 中**均检索不到**令牌串（令牌值不记录）。构建日志首行为 `xcodebuild … CODE_SIGNING_ALLOWED=NO build`，全日志 274 行无 `DAYCUE_DEFAULT_TOKEN`。
+- **影响范围**：该发布产物的开箱可用性；源码与其他产物不受影响。
+- **根因与定位依据**：令牌设计为构建期注入（`project.yml` 的 `DAYCUE_DEFAULT_TOKEN`，默认空串），构建者未设置该构建设置，故 Info.plist 键为空 → `AppSettings` 读到空串 → 不写 Keychain。
+- **解决方案及实际变更**：未修改代码。两条可行路径：①在模拟器「设置」页手动填入令牌；②重新构建时传 `DAYCUE_DEFAULT_TOKEN=<令牌>`。
+- **回归测试位置 / 测试 ID**：模拟器内点「提取待办」，期望 `POST /v1/extractions 200`。
+- **验证命令、环境、结果与时间**：2026-11-01 已做产物字节级检查（令牌不存在）；功能级验证未执行（无 macOS 环境）。
+- **关联提交 / PR / 其他问题 ID**：ISSUE-20261101-004（令牌注入机制）。
+- **残余风险、复发记录**：令牌写进产物即随包分发，拿到包的人可消耗服务器模型额度；公开 Release 中分发带令牌的包需谨慎，仓库当前为公开状态。
+
 ## 回归测试索引
 
 | 问题 ID | 对应自动化测试或人工步骤 | 最近验证日期 | 结果 | 未覆盖原因 |
@@ -956,3 +973,4 @@
 | ISSUE-20261101-004 | Mac 上 `swift test` + 真机提取 | 未执行 | — | 无 macOS 环境 |
 | ISSUE-20261101-005 | 真机说话 → 停止 → 提取 | 未执行 | — | 需真机发声测试 |
 | ISSUE-20261101-006 | Mac 上 `xcodebuild` 模拟器目标 | 未执行 | — | 当前环境无 macOS |
+| ISSUE-20261101-007 | 模拟器内点「提取待办」，期望 200 | 未执行 | — | 无 macOS 环境 |
