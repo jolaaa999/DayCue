@@ -260,7 +260,7 @@ public actor CloudSyncReplayer {
         do {
             result = try await perform(trigger: trigger, at: at, token: token)
         } catch let error as SyncClientError {
-            result = handle(error: error, trigger: trigger, at: at)
+            result = await handle(error: error, trigger: trigger, at: at)
         } catch {
             result = CloudSyncRunResult(
                 didRun: true,
@@ -666,7 +666,7 @@ public actor CloudSyncReplayer {
                 continue
             }
 
-            guard let payloadJSON = encodeServerPayload(change.payload),
+            guard let payloadJSON = try encodeServerPayload(change.payload),
                   let payload = try? SyncPayloadCodec.decode(payloadJSON) else {
                 // 载荷解不出来：不写本地，但游标继续推进，否则永远卡在这一页。
                 continue

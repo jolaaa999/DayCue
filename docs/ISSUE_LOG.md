@@ -54,6 +54,7 @@
 | ISSUE-20261101-002 | 服务端 ASR 供应商 | P2 | 已确认（未修复） | 2026-11-01 | 2026-11-01 | `curl -F file=@silence.wav $BASE/audio/transcriptions` |
 | ISSUE-20261101-003 | 服务端 LLM 供应商 | P1 | 已验证解决 | 2026-11-01 | 2026-11-01 | 真实提取请求 → 200 + 时刻正确 |
 | ISSUE-20261101-004 | iOS 构建/联网 | P1 | 已修改（未验证编译） | 2026-11-01 | 2026-11-01 | 待 Mac 上 `xcodegen generate` + 真机验证 |
+| ISSUE-20261101-006 | iOS 编译 | P1 | 已修复（待复编验证） | 2026-11-01 | 2026-11-01 | Mac 上 `xcodebuild` 复编 |
 | ISSUE-20261101-005 | Android 语音（方案 B） | P2 | 待验证 | 2026-11-01 | 2026-11-01 | 真机录一段话看是否走系统听写 |
 
 ## 问题详情
@@ -877,6 +878,22 @@
 - **关联提交 / PR / 其他问题 ID**：ISSUE-20261101-002、ISSUE-20261101-004。
 - **残余风险、复发记录**：部分机型无听写服务或只支持在线识别（会提示"需要联网"）；系统听写不保存音频，失败时用户需重说，无法事后重转写。
 
+### ISSUE-20261101-006｜iOS 首次编译报 4 处错误（参数标签不符、枚举当字符串、缺 await/try）
+- **首次发现 / 最近更新**：2026-11-01 / 2026-11-01
+- **模块与环境**：`Sources/DayCueCore/{NoteExtraction,DayCueStore+Geo,CloudSyncReplayer}.swift`；朋友的 Mac + Xcode 16 模拟器目标（iOS 17）
+- **严重程度**：P1（阻断 iOS 构建）
+- **状态**：已修复（待复编验证）
+- **现象、预期、实际**：首次 `xcodebuild` 失败，四处编译错误：①`NoteExtraction.swift:132` 函数调用参数标签与类型不匹配；②`DayCueStore+Geo.swift:291` 等 3 处把枚举传给需要 `String` 的参数；③`CloudSyncReplayer.swift:263` 缺 `await`；④同文件 669 行缺 `try`。
+- **复现步骤与条件**：在 macOS 上 `xcodegen generate` 后编译 DayCue scheme。
+- **原始证据（已脱敏）**：编译输出 "NoteExtraction.swift (line 132): 函数调用的参数标签及类型不匹配"、"DayCueStore+Geo.swift (line 291): 3 处将枚举传给需要 String 的参数"、"CloudSyncReplayer.swift (line 263): 缺少 await；第 669 行还缺少 try"。
+- **影响范围**：仅 iOS 构建；Android 与后端不受影响。
+- **根因与定位依据**：①`applySelectedNoteDrafts` 调用了并不存在的 `noteBody(forDraft:)`（只有接 `ContractExtractionItem` 的 `noteBody(for:)`）；②`PlaceRecord.coordinateSystem` 是 `PlaceCoordinateSystem` 枚举，绑定时直接传了枚举值；读取处又把 `String` 与 `PlaceCoordinateSystem.wgs84.rawValue`（String）混着用；③`handle(error:...)` 声明为 `async`、`encodeServerPayload` 声明为 `throws`，调用点漏了 `await` / `try`。根因是这批代码在 Windows 上编写，从未经过编译器检查。
+- **解决方案及实际变更**：①新增 `private static func noteBody(forDraft draft: ReviewDraft) -> String`，与 `noteBody(for:)` 保持同一套「detail 优先、退回证据原文」规则；②三处写库改为 `.text(record.coordinateSystem.rawValue)`，读取改为 `statement.string(5).flatMap(PlaceCoordinateSystem.init(rawValue:)) ?? .wgs84`；③补 `await` 与 `try`。
+- **回归测试位置 / 测试 ID**：Mac 上 `xcodebuild -scheme DayCue -destination "generic/platform=iOS Simulator" build`。
+- **验证命令、环境、结果与时间**：未执行（当前环境无 Swift 工具链）；已用静态扫描核对其余 `.text()` 绑定与 async/throws 调用点，未发现同类遗漏（其余命中均为同名函数误报）。
+- **关联提交 / PR / 其他问题 ID**：ISSUE-20261101-004。
+- **残余风险、复发记录**：iOS 代码从未完整编译过，修完这 4 处后仍可能出现新的编译错误（如 `@MainActor` 隔离、Sendable 约束），需按报错继续迭代。
+
 ## 回归测试索引
 
 | 问题 ID | 对应自动化测试或人工步骤 | 最近验证日期 | 结果 | 未覆盖原因 |
@@ -932,3 +949,4 @@
 | ISSUE-20261101-003 | 真实提取请求 + 核对 due/remind 时刻 | 2026-11-01 | 通过（PC 200 / 手机 200） | 未做自动化门禁 |
 | ISSUE-20261101-004 | Mac 上 `swift test` + 真机提取 | 未执行 | — | 无 macOS 环境 |
 | ISSUE-20261101-005 | 真机说话 → 停止 → 提取 | 未执行 | — | 需真机发声测试 |
+| ISSUE-20261101-006 | Mac 上 `xcodebuild` 模拟器目标 | 未执行 | — | 当前环境无 macOS |

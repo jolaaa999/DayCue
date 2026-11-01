@@ -243,6 +243,17 @@ public extension DayCueStore {
         return item.sourceEvidence
     }
 
+    /// 正文：与 noteBody(for:) 同一套规则，只是输入换成预览页的草稿。
+    ///
+    /// 两条落库入口（契约响应 / 用户勾选的草稿）必须得到同样的正文，
+    /// 否则同一条笔记从不同入口进来会长得不一样。
+    private static func noteBody(forDraft draft: ReviewDraft) -> String {
+        if let detail = draft.detail, !detail.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return detail
+        }
+        return draft.sourceEvidence
+    }
+
     private static func firstNonEmptyLine(of text: String) -> String {
         for line in text.split(separator: "\n", omittingEmptySubsequences: false) {
             let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
