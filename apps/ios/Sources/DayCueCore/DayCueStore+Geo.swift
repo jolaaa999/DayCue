@@ -675,11 +675,11 @@ public extension DayCueStore {
             activeToLocal: statement.string(8),
             weekdays: statement.string(9),
             enabled: statement.bool(10),
+            linkedTaskID: statement.string(15),
             expiresAtUTC: statement.string(11),
             createdAt: statement.string(12) ?? "",
             updatedAt: statement.string(13) ?? "",
-            deletedAt: statement.string(14),
-            linkedTaskID: statement.string(15)
+            deletedAt: statement.string(14)
         )
     }
 

@@ -892,6 +892,7 @@
 - **回归测试位置 / 测试 ID**：Mac 上 `xcodebuild -scheme DayCue -destination "generic/platform=iOS Simulator" build`。
 - **验证命令、环境、结果与时间**：未执行（当前环境无 Swift 工具链）；已用静态扫描核对其余 `.text()` 绑定与 async/throws 调用点，未发现同类遗漏（其余命中均为同名函数误报）。
 - **关联提交 / PR / 其他问题 ID**：ISSUE-20261101-004。
+- **2026-11-01 复编补充（第 5 处）**：拉取 8fef815 后再次编译，报 `DayCueStore+Geo.swift (line 682) 参数顺序不正确，linkedTaskID 必须放在 expiresAtUTC 前面`。原因：`GeoRuleRecord.init` 的形参顺序是 `... enabled, linkedTaskID, expiresAtUTC, createdAt, updatedAt, deletedAt`（属性声明顺序），`makeGeoRule` 调用时按数据库列序写成 `expiresAtUTC(11) → ... → linkedTaskID(15)`。Swift 的命名参数只放宽可读性，**不改变顺序约束**。已把 `linkedTaskID: statement.string(15)` 移到 `expiresAtUTC` 之前，其余实参保持原列号不变。同时用脚本扫描全工程 291 个显式 init 的调用点，36 处命中经抽查均为误报（结构体无显式 init 时走 memberwise init，顺序由属性声明决定）。
 - **残余风险、复发记录**：iOS 代码从未完整编译过，修完这 4 处后仍可能出现新的编译错误（如 `@MainActor` 隔离、Sendable 约束），需按报错继续迭代。
 
 ## 回归测试索引
