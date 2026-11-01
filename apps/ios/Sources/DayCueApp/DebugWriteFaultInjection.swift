@@ -1,5 +1,6 @@
 #if DEBUG
 import Foundation
+import DayCueCore
 
 /// 仅 Debug 构建存在的故障注入点。
 ///

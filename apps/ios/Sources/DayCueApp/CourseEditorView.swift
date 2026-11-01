@@ -409,6 +409,10 @@ private struct EditableRule: Identifiable, Equatable {
 
     var id: String { localId }
 
+}
+
+private extension EditableRule {
+
     init(rule: CourseScheduleRule, timeZone: TimeZone) {
         self.localId = DayCueID.new()
         self.ruleId = rule.id

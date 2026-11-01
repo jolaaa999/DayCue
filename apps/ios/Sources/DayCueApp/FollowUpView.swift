@@ -478,9 +478,16 @@ private struct FollowUpReplySheet: View {
 
         let accepted = suggestions.first { $0.id == acceptedSuggestionId }
         let timeZone = container.currentTimeZone
+        let course: CourseRecord?
+        do {
+            course = try container.store.course(id: item.followUp.courseId)
+        } catch {
+            errorMessage = "归档失败：\(error)"
+            return
+        }
         let request = FollowUpArchiveRequest(
             followUp: item.followUp,
-            course: container.store.course(id: item.followUp.courseId) ?? nil,
+            course: course,
             replyKind: mediaPath == nil ? .text : .audio,
             text: body.isEmpty ? nil : body,
             transcript: spoken.isEmpty ? nil : spoken,

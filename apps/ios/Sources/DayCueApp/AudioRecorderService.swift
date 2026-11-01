@@ -69,7 +69,7 @@ final class AudioRecorderService: NSObject, ObservableObject {
     func start() async throws {
         guard !isRecording else { return }
 
-        guard hasPermission else {
+        if !hasPermission {
             let granted = await requestPermission()
             guard granted else { throw AudioRecorderError.permissionDenied }
         }
